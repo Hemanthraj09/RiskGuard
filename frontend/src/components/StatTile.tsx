@@ -2,17 +2,19 @@ export function StatTile({
   label,
   value,
   sublabel,
+  valueColor,
 }: {
   label: string;
   value: string;
   sublabel?: string;
+  valueColor?: string;
 }) {
   return (
     <div className="panel p-4">
       <div className="text-xs font-medium uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
         {label}
       </div>
-      <div className="tabular mt-1.5 text-2xl font-semibold" style={{ color: "var(--text-primary)" }}>
+      <div className="tabular mt-1.5 text-2xl font-semibold" style={{ color: valueColor ?? "var(--text-primary)" }}>
         {value}
       </div>
       {sublabel && (

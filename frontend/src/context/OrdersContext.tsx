@@ -48,8 +48,17 @@ export function OrdersProvider({ children }: { children: React.ReactNode }) {
     }
   }, [orders, isHydrated]);
 
+  // Dedup by order_id: the same order can legitimately reach addOrders
+  // twice (e.g. simulated on the Simulation Console, then re-fetched by the
+  // dashboard's cold-start GET /orders load) -- without this, it would
+  // appear twice in the feed.
   const addOrders = useCallback((newOrders: ScoredOrder[]) => {
-    setOrders((prev) => [...newOrders, ...prev].slice(0, MAX_FEED_SIZE));
+    setOrders((prev) => {
+      const existingIds = new Set(prev.map((o) => o.order_id));
+      const deduped = newOrders.filter((o) => !existingIds.has(o.order_id));
+      if (deduped.length === 0) return prev;
+      return [...deduped, ...prev].slice(0, MAX_FEED_SIZE);
+    });
   }, []);
 
   const selectOrder = useCallback((order: ScoredOrder | null) => setSelectedOrder(order), []);

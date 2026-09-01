@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getDecisions } from "@/lib/api";
 import type { DecisionLogEntry } from "@/lib/types";
 import { RiskBadge } from "@/components/RiskBadge";
+import { StatTile } from "@/components/StatTile";
 
 const rupees = (v: number) => `Rs.${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
@@ -51,6 +52,15 @@ export function DecisionsLog({ refreshKey }: { refreshKey: number }) {
     return null;
   }
 
+  const totalDecisions = decisions.length;
+  const agreements = decisions.filter(
+    (d) => (d.risk_band === "high") === (d.analyst_decision === "flagged_for_verification")
+  ).length;
+  const overrides = totalDecisions - agreements;
+  const agreementRate = totalDecisions > 0 ? agreements / totalDecisions : 0;
+  const agreementRateColor =
+    agreementRate > 0.7 ? "var(--status-good)" : agreementRate >= 0.5 ? "var(--status-warning)" : "var(--status-critical)";
+
   return (
     <section className="panel p-6">
       <h2 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
@@ -67,6 +77,17 @@ export function DecisionsLog({ refreshKey }: { refreshKey: number }) {
           verification&quot; on an order to record one.
         </div>
       ) : (
+        <>
+        <div className="mt-4 grid grid-cols-3 gap-3">
+          <StatTile label="Total decisions" value={String(totalDecisions)} />
+          <StatTile
+            label="Agreement rate"
+            value={`${(agreementRate * 100).toFixed(0)}%`}
+            valueColor={agreementRateColor}
+            sublabel={`${agreements} of ${totalDecisions} agree with model`}
+          />
+          <StatTile label="Overrides" value={String(overrides)} sublabel="Analyst disagreed with model" />
+        </div>
         <div className="mt-4 max-h-[420px] overflow-y-auto overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="sticky top-0" style={{ background: "var(--surface-raised)" }}>
@@ -105,6 +126,7 @@ export function DecisionsLog({ refreshKey }: { refreshKey: number }) {
             </tbody>
           </table>
         </div>
+        </>
       )}
     </section>
   );

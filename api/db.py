@@ -203,6 +203,19 @@ def insert_decision(conn: sqlite3.Connection, order_id: str, analyst_decision: s
     )
 
 
+def get_recent_orders(conn: sqlite3.Connection, limit: int = 200):
+    """Most recently scored orders (simulated or live), newest first -- used
+    to repopulate the dashboard's live feed on a cold page load. Seeded
+    historical orders have predicted_probability = NULL (never scored
+    through the API), so they're excluded here."""
+    rows = conn.execute(
+        "SELECT * FROM orders WHERE predicted_probability IS NOT NULL "
+        "ORDER BY order_timestamp DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_decisions(conn: sqlite3.Connection, limit: int = 100):
     """
     Decisions joined with the order they were made on, newest first -- the

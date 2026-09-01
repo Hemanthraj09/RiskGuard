@@ -1,25 +1,33 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f9f9f7;
-  --surface: #fcfcfb;
-  --surface-raised: #ffffff;
-  --text-primary: #0b0b0b;
-  --text-secondary: #52514e;
-  --text-muted: #898781;
-  --gridline: #e1e0d9;
-  --baseline: #c3c2b7;
-  --border: rgba(11, 11, 11, 0.1);
+  color-scheme: dark;
 
-  --series-1: #2a78d6; /* blue: primary sequential / line series */
-  --series-1-soft: #cde2fb;
+  --background: #0d0d0f;
+  --surface: #13131a;
+  --surface-raised: #1a1a24;
+  --text-primary: #f0f0f5;
+  --text-secondary: #9999b3;
+  --text-muted: #6f6f87;
+  --gridline: #24242f;
+  --baseline: #3d3d4d;
+  --border: rgba(240, 240, 245, 0.1);
 
-  --status-good: #0ca30c;
-  --status-good-bg: #e8f6e8;
-  --status-warning: #b5790f;
-  --status-warning-bg: #fdf1d9;
-  --status-critical: #d03b3b;
-  --status-critical-bg: #fbe7e7;
+  /* Razorpay electric blue -- primary brand accent. --series-1 mirrors it
+     so chart lines / links / buttons stay visually consistent with the
+     logo and active-tab treatment without every call site needing to know
+     about the --accent-* naming. */
+  --accent: #3d5afe;
+  --accent-soft: rgba(61, 90, 254, 0.15);
+  --series-1: #3d5afe;
+  --series-1-soft: rgba(61, 90, 254, 0.15);
+
+  --status-good: #22e6a0;
+  --status-good-bg: rgba(34, 230, 160, 0.14);
+  --status-warning: #ffb020;
+  --status-warning-bg: rgba(255, 176, 32, 0.14);
+  --status-critical: #ff4d6d;
+  --status-critical-bg: rgba(255, 77, 109, 0.14);
 }
 
 @theme inline {
@@ -30,15 +38,46 @@
 body {
   background: var(--background);
   color: var(--text-primary);
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-inter), system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 .panel {
   background: var(--surface-raised);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 16px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
 }
 
 .tabular {
   font-variant-numeric: tabular-nums;
+}
+
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-in {
+  animation: fadeSlideIn 0.5s ease-out;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface) 25%, var(--surface-raised) 50%, var(--surface) 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
 }

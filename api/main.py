@@ -10,6 +10,7 @@ Run with:
 (from the riskguard/ directory)
 """
 
+import json
 import os
 import sys
 import uuid
@@ -18,8 +19,9 @@ from datetime import datetime, timedelta
 from typing import Literal, Optional
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -160,8 +162,7 @@ def score(req: ScoreRequest):
         conn.close()
 
 
-@app.post("/simulate")
-def simulate(req: SimulateRequest):
+def _simulate_batch(conn, n: int, risk_shift: float):
     # Outcome-visibility policy: a real order's return outcome isn't known
     # for days or weeks, so orders generated within the SAME batch must not
     # see each other -- not their existence, not their (nonexistent-yet)
@@ -173,92 +174,169 @@ def simulate(req: SimulateRequest):
     # that frozen snapshot only, and deferring ALL database writes (new
     # customers + new orders) until the whole batch has been scored. Only
     # *future* /simulate or /score calls will see these orders as history.
+    #
+    # Shared by /simulate (collects every yielded result before returning)
+    # and /simulate/stream (forwards each yielded result to the client as
+    # it's scored) -- both drive this generator to exhaustion before its
+    # caller commits anything, so the isolation guarantee above holds
+    # identically for either consumer.
+    rng = np.random.RandomState()  # unseeded: each simulate call looks "live" and different
+    base_ts = datetime.utcnow()
+    seq_start = db.next_order_seq(conn)
+    new_cust_seq = db.next_synthetic_customer_seq(conn)
+
+    snapshot_cache: dict = {}  # customer_id -> (record, past_orders), pre-batch only
+    pending_new_customers: list = []  # (customer_id, created_at, pincode_tier)
+    pending_orders: list = []  # order dicts ready for db.insert_order
+
+    def load_snapshot(customer_id: str):
+        if customer_id in snapshot_cache:
+            return snapshot_cache[customer_id]
+        record = db.get_customer(conn, customer_id)
+        record["account_created_date"] = datetime.strptime(record["account_created_date"], "%Y-%m-%d %H:%M:%S")
+        past_orders = db.get_past_orders(conn, customer_id, base_ts)
+        for o in past_orders:
+            o["order_timestamp"] = datetime.strptime(o["order_timestamp"], "%Y-%m-%d %H:%M:%S")
+        snapshot_cache[customer_id] = (record, past_orders)
+        return record, past_orders
+
+    for i in range(n):
+        order_timestamp = base_ts + timedelta(seconds=i)  # strictly increasing order_id/timestamp bookkeeping only
+        order_fields = sample_order_fields(risk_shift, rng)
+
+        use_existing = rng.random() < EXISTING_CUSTOMER_PROB
+        customer_id = None
+        if use_existing:
+            candidates = db.random_existing_customer_ids(conn, 1)
+            if candidates:
+                customer_id = candidates[0]
+
+        if customer_id:
+            record, past_orders = load_snapshot(customer_id)
+            order_fields["delivery_pincode_tier"] = record["pincode_tier"]
+        else:
+            customer_id = make_new_customer_id(new_cust_seq)
+            new_cust_seq += 1
+            record = {"account_created_date": order_timestamp}
+            past_orders = []
+            pending_new_customers.append((customer_id, order_timestamp, order_fields["delivery_pincode_tier"]))
+
+        customer_features = features.compute_features(
+            record, past_orders, order_timestamp, order_fields["order_value"]
+        )
+        result = scoring.score_order(order_fields, customer_features)
+
+        order_id = f"SIMORD{seq_start + i:07d}"
+        pending_orders.append({
+            "order_id": order_id,
+            "customer_id": customer_id,
+            "order_timestamp": order_timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "order_value": order_fields["order_value"],
+            "product_category": order_fields["product_category"],
+            "payment_mode": order_fields["payment_mode"],
+            "discount_applied": order_fields.get("discount_applied", 0.0),
+            "delivery_pincode_tier": order_fields["delivery_pincode_tier"],
+            "returned": None,
+            "predicted_probability": result["probability"],
+            "risk_band": result["risk_band"],
+            "is_simulated": 1,
+        })
+        yield {
+            "order_id": order_id,
+            "customer_id": customer_id,
+            "order_timestamp": order_timestamp.isoformat(),
+            **order_fields,
+            **result,
+            "customer_features": customer_features,
+        }
+
+    # Commit the whole batch atomically, only now that every order has been
+    # scored against pre-batch history (i.e. only once this generator has
+    # been driven to exhaustion by its caller).
+    for cid, created_at, tier in pending_new_customers:
+        db.insert_customer(conn, cid, created_at, tier, is_synthetic_new=True)
+    for order in pending_orders:
+        db.insert_order(conn, order)
+    conn.commit()
+
+
+@app.post("/simulate")
+def simulate(req: SimulateRequest):
     conn = db.get_connection()
     try:
-        rng = np.random.RandomState()  # unseeded: each simulate call looks "live" and different
-        base_ts = datetime.utcnow()
-        seq_start = db.next_order_seq(conn)
-        new_cust_seq = db.next_synthetic_customer_seq(conn)
-
-        snapshot_cache: dict = {}  # customer_id -> (record, past_orders), pre-batch only
-        pending_new_customers: list = []  # (customer_id, created_at, pincode_tier)
-        pending_orders: list = []  # order dicts ready for db.insert_order
-
-        def load_snapshot(customer_id: str):
-            if customer_id in snapshot_cache:
-                return snapshot_cache[customer_id]
-            record = db.get_customer(conn, customer_id)
-            record["account_created_date"] = datetime.strptime(record["account_created_date"], "%Y-%m-%d %H:%M:%S")
-            past_orders = db.get_past_orders(conn, customer_id, base_ts)
-            for o in past_orders:
-                o["order_timestamp"] = datetime.strptime(o["order_timestamp"], "%Y-%m-%d %H:%M:%S")
-            snapshot_cache[customer_id] = (record, past_orders)
-            return record, past_orders
-
-        results = []
-        for i in range(req.n):
-            order_timestamp = base_ts + timedelta(seconds=i)  # strictly increasing order_id/timestamp bookkeeping only
-            order_fields = sample_order_fields(req.risk_shift, rng)
-
-            use_existing = rng.random() < EXISTING_CUSTOMER_PROB
-            customer_id = None
-            if use_existing:
-                candidates = db.random_existing_customer_ids(conn, 1)
-                if candidates:
-                    customer_id = candidates[0]
-
-            if customer_id:
-                record, past_orders = load_snapshot(customer_id)
-                order_fields["delivery_pincode_tier"] = record["pincode_tier"]
-            else:
-                customer_id = make_new_customer_id(new_cust_seq)
-                new_cust_seq += 1
-                record = {"account_created_date": order_timestamp}
-                past_orders = []
-                pending_new_customers.append((customer_id, order_timestamp, order_fields["delivery_pincode_tier"]))
-
-            customer_features = features.compute_features(
-                record, past_orders, order_timestamp, order_fields["order_value"]
-            )
-            result = scoring.score_order(order_fields, customer_features)
-
-            order_id = f"SIMORD{seq_start + i:07d}"
-            pending_orders.append({
-                "order_id": order_id,
-                "customer_id": customer_id,
-                "order_timestamp": order_timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                "order_value": order_fields["order_value"],
-                "product_category": order_fields["product_category"],
-                "payment_mode": order_fields["payment_mode"],
-                "discount_applied": order_fields.get("discount_applied", 0.0),
-                "delivery_pincode_tier": order_fields["delivery_pincode_tier"],
-                "returned": None,
-                "predicted_probability": result["probability"],
-                "risk_band": result["risk_band"],
-                "is_simulated": 1,
-            })
-            results.append({
-                "order_id": order_id,
-                "customer_id": customer_id,
-                "order_timestamp": order_timestamp.isoformat(),
-                **order_fields,
-                **result,
-                "customer_features": customer_features,
-            })
-
-        # Commit the whole batch atomically, only now that every order has
-        # been scored against pre-batch history.
-        for cid, created_at, tier in pending_new_customers:
-            db.insert_customer(conn, cid, created_at, tier, is_synthetic_new=True)
-        for order in pending_orders:
-            db.insert_order(conn, order)
-        conn.commit()
+        results = list(_simulate_batch(conn, req.n, req.risk_shift))
 
         band_counts = {"low": 0, "medium": 0, "high": 0}
         for r in results:
             band_counts[r["risk_band"]] += 1
 
         return {"orders": results, "risk_shift": req.risk_shift, "band_counts": band_counts}
+    finally:
+        conn.close()
+
+
+@app.get("/simulate/stream")
+def simulate_stream(
+    n: int = Query(default=100, ge=1, le=500),
+    risk_shift: float = Query(default=0.0, ge=0.0, le=1.0),
+):
+    """SSE variant of /simulate for the Simulation Console's live feed: same
+    batch-isolation guarantee and same DB-write timing as the POST endpoint
+    (see _simulate_batch) -- this only changes how results reach the client,
+    streaming each one as it's scored instead of waiting for the whole batch."""
+    def event_stream():
+        conn = db.get_connection()
+        try:
+            band_counts = {"low": 0, "medium": 0, "high": 0}
+            for result in _simulate_batch(conn, n, risk_shift):
+                band_counts[result["risk_band"]] += 1
+                yield f"data: {json.dumps(result)}\n\n"
+            yield f"data: {json.dumps({'done': True, 'band_counts': band_counts})}\n\n"
+        finally:
+            conn.close()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/orders")
+def orders(limit: int = Query(default=200, ge=1, le=1000)):
+    """Repopulates the dashboard's live feed on a cold page load. Only
+    orders that have actually been scored through the API (simulated or
+    live) are returned -- customer_features and top_contributors require
+    the original scoring pass (temporal features off frozen history, SHAP
+    off the live model) and aren't reconstructed here, so they come back
+    null; recommendation/recommended_action/optimal_threshold are cheap,
+    deterministic derivations of the already-stored risk_band and are
+    reconstructed exactly."""
+    conn = db.get_connection()
+    try:
+        rows = db.get_recent_orders(conn, limit=limit)
+        results = []
+        for r in rows:
+            probability = r["predicted_probability"]
+            band = r["risk_band"]
+            results.append({
+                "order_id": r["order_id"],
+                "customer_id": r["customer_id"],
+                "order_timestamp": r["order_timestamp"].replace(" ", "T"),
+                "order_value": r["order_value"],
+                "product_category": r["product_category"],
+                "payment_mode": r["payment_mode"],
+                "discount_applied": r["discount_applied"],
+                "delivery_pincode_tier": r["delivery_pincode_tier"],
+                "probability": probability,
+                "risk_band": band,
+                "recommendation": "flag_for_verification" if probability >= scoring.OPTIMAL_THRESHOLD else "accept_normally",
+                "recommended_action": scoring.recommend_action(band, r["payment_mode"], r["product_category"]),
+                "optimal_threshold": scoring.OPTIMAL_THRESHOLD,
+                "top_contributors": None,
+                "customer_features": None,
+            })
+        return {"orders": results}
     finally:
         conn.close()
 

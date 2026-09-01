@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { getMetrics } from "@/lib/api";
 import type { CostCurvePoint, EvalResults } from "@/lib/types";
 import { StatTile } from "@/components/StatTile";
+import { PerformanceSkeleton } from "@/components/PerformanceSkeleton";
 import { ConfusionMatrix } from "@/components/ConfusionMatrix";
 import { RocCurveChart } from "@/components/charts/RocCurveChart";
 import { PrCurveChart } from "@/components/charts/PrCurveChart";
@@ -81,7 +82,7 @@ export default function PerformancePage() {
   }
 
   if (!metrics || !derived) {
-    return <div className="text-sm" style={{ color: "var(--text-muted)" }}>Loading model performance…</div>;
+    return <PerformanceSkeleton />;
   }
 
   const { selected, testEntry, testCost, f1 } = derived;
@@ -106,6 +107,24 @@ export default function PerformancePage() {
           {pct(metrics.positive_rate)} actually returned. Validation set (
           {metrics.validation_set_size.toLocaleString()} orders) is used only to select the
           decision threshold below &mdash; never to evaluate it.
+        </p>
+      </div>
+
+      <div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <StatTile label="ROC-AUC" value={metrics.roc_auc.toFixed(3)} />
+          <StatTile label="Ceiling AUC" value={metrics.bayes_optimal_ceiling_auc.toFixed(3)} sublabel="Bayes-optimal" />
+          <StatTile
+            label="Ceiling captured"
+            value={`${((metrics.roc_auc / metrics.bayes_optimal_ceiling_auc) * 100).toFixed(0)}%`}
+          />
+          <StatTile label="Brier score" value={metrics.brier_score.toFixed(3)} sublabel="Lower is better" />
+          <StatTile label="ECE" value={metrics.ece.toFixed(3)} sublabel="Calibration error" />
+          <StatTile label="Threshold" value={metrics.threshold_selection.optimal_threshold.toFixed(3)} sublabel="Cost-optimal" />
+        </div>
+        <p className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
+          AUC captures {((metrics.roc_auc / metrics.bayes_optimal_ceiling_auc) * 100).toFixed(0)}% of the
+          theoretically achievable ceiling.
         </p>
       </div>
 

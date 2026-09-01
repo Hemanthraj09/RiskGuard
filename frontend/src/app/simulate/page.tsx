@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { simulateOrders } from "@/lib/api";
-import type { RiskBand } from "@/lib/types";
+import { simulateStreamUrl } from "@/lib/api";
+import type { RiskBand, ScoredOrder } from "@/lib/types";
 import { useOrders } from "@/context/OrdersContext";
 
 const BAND_COLOR: Record<RiskBand, string> = {
@@ -17,21 +17,44 @@ export default function SimulatePage() {
   const [n, setN] = useState(100);
   const [riskShift, setRiskShift] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [received, setReceived] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [lastBatch, setLastBatch] = useState<{ bandCounts: Record<RiskBand, number>; total: number } | null>(null);
+  const sourceRef = useRef<EventSource | null>(null);
 
-  async function handleGenerate() {
+  useEffect(() => () => sourceRef.current?.close(), []);
+
+  function handleGenerate() {
+    sourceRef.current?.close();
     setLoading(true);
     setError(null);
-    try {
-      const res = await simulateOrders(n, riskShift);
-      addOrders(res.orders);
-      setLastBatch({ bandCounts: res.band_counts, total: res.orders.length });
-    } catch (e) {
-      setError(String(e));
-    } finally {
+    setReceived(0);
+    setLastBatch(null);
+
+    const source = new EventSource(simulateStreamUrl(n, riskShift));
+    sourceRef.current = source;
+    let count = 0;
+
+    source.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.done) {
+        setLastBatch({ bandCounts: data.band_counts, total: count });
+        source.close();
+        sourceRef.current = null;
+        setLoading(false);
+        return;
+      }
+      addOrders([data as ScoredOrder]);
+      count += 1;
+      setReceived(count);
+    };
+
+    source.onerror = () => {
+      source.close();
+      sourceRef.current = null;
       setLoading(false);
-    }
+      setError("Streaming connection to the API failed.");
+    };
   }
 
   return (
@@ -95,7 +118,7 @@ export default function SimulatePage() {
           className="mt-6 rounded-md px-4 py-2 text-sm font-semibold text-white transition-opacity disabled:opacity-60"
           style={{ background: "var(--series-1)" }}
         >
-          {loading ? "Generating…" : `Generate ${n} orders`}
+          {loading ? `Generating… (${received}/${n})` : `Generate ${n} orders`}
         </button>
 
         {error && (

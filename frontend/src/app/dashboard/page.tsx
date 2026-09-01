@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useOrders } from "@/context/OrdersContext";
 import { RiskBadge } from "@/components/RiskBadge";
 import { DecisionsLog } from "@/components/DecisionsLog";
 import type { AnalystDecision, ScoredOrder } from "@/lib/types";
-import { postDecision, scoreOrder } from "@/lib/api";
+import { getOrders, postDecision, scoreOrder } from "@/lib/api";
 
 const rupees = (v: number) => `Rs.${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
@@ -194,7 +194,8 @@ function DecisionButtons({ order, onDecided }: { order: ScoredOrder; onDecided: 
 }
 
 function OrderDetail({ order, onDecided }: { order: ScoredOrder; onDecided: () => void }) {
-  const maxAbs = Math.max(...order.top_contributors.map((c) => Math.abs(c.shap_value)), 0.0001);
+  const contributors = order.top_contributors ?? [];
+  const maxAbs = Math.max(...contributors.map((c) => Math.abs(c.shap_value)), 0.0001);
 
   return (
     <div className="panel sticky top-6 p-5">
@@ -247,14 +248,57 @@ function OrderDetail({ order, onDecided }: { order: ScoredOrder; onDecided: () =
         <dd className="text-right" style={{ color: "var(--text-primary)" }}>{order.delivery_pincode_tier}</dd>
         <dt style={{ color: "var(--text-muted)" }}>Customer return history</dt>
         <dd className="tabular text-right" style={{ color: "var(--text-primary)" }}>
-          {(order.customer_features.bayesian_return_rate * 100).toFixed(1)}%
+          {order.customer_features ? `${(order.customer_features.bayesian_return_rate * 100).toFixed(1)}%` : "—"}
         </dd>
       </dl>
+
+      {order.customer_features && (
+        <div className="mt-5">
+          <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
+            Customer profile
+          </h3>
+          <dl className="mt-2 grid grid-cols-2 gap-y-2 text-sm">
+            <dt style={{ color: "var(--text-muted)" }}>Return rate (bayesian)</dt>
+            <dd className="tabular text-right" style={{ color: "var(--text-primary)" }}>
+              {(order.customer_features.bayesian_return_rate * 100).toFixed(1)}%
+            </dd>
+            <dt style={{ color: "var(--text-muted)" }}>Returns (30d / 90d)</dt>
+            <dd className="tabular text-right" style={{ color: "var(--text-primary)" }}>
+              {order.customer_features.returns_last_30d} / {order.customer_features.returns_last_90d}
+            </dd>
+            <dt style={{ color: "var(--text-muted)" }}>Last order</dt>
+            <dd className="tabular text-right" style={{ color: "var(--text-primary)" }}>
+              {order.customer_features.days_since_last_order === -1
+                ? "First order"
+                : `${order.customer_features.days_since_last_order} days ago`}
+            </dd>
+            <dt style={{ color: "var(--text-muted)" }}>Value vs. customer avg</dt>
+            <dd className="tabular text-right" style={{ color: "var(--text-primary)" }}>
+              {order.customer_features.order_value_vs_customer_avg.toFixed(1)}&times;
+            </dd>
+            <dt style={{ color: "var(--text-muted)" }}>Purchase frequency</dt>
+            <dd className="tabular text-right" style={{ color: "var(--text-primary)" }}>
+              {order.customer_features.customer_purchase_frequency.toFixed(1)} orders/month
+            </dd>
+            <dt style={{ color: "var(--text-muted)" }}>Account age</dt>
+            <dd className="tabular text-right" style={{ color: "var(--text-primary)" }}>
+              {order.customer_features.account_age_days} days
+            </dd>
+          </dl>
+        </div>
+      )}
 
       <div className="mt-5">
         <h3 className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--text-muted)" }}>
           Why this score (SHAP)
         </h3>
+        {contributors.length === 0 ? (
+          <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+            Not available for orders loaded from history &mdash; SHAP explanations are only computed
+            at scoring time.
+          </p>
+        ) : (
+        <>
         <p className="mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
           Relative influence on the raw risk score. SHAP explains the underlying model directly;
           the calibrated probability above passes that raw score through an additional isotonic
@@ -262,7 +306,7 @@ function OrderDetail({ order, onDecided }: { order: ScoredOrder; onDecided: () =
           explain the ranking, not the exact calibrated number.
         </p>
         <div className="mt-3 flex flex-col gap-2.5">
-          {order.top_contributors.map((c, i) => {
+          {contributors.map((c, i) => {
             const width = (Math.abs(c.shap_value) / maxAbs) * 100;
             const color = c.direction === "increases_risk" ? "var(--status-critical)" : "var(--status-good)";
             return (
@@ -281,6 +325,8 @@ function OrderDetail({ order, onDecided }: { order: ScoredOrder; onDecided: () =
             );
           })}
         </div>
+        </>
+        )}
       </div>
     </div>
   );
@@ -289,6 +335,39 @@ function OrderDetail({ order, onDecided }: { order: ScoredOrder; onDecided: () =
 export default function DashboardPage() {
   const { orders, addOrders, selectedOrder, selectOrder } = useOrders();
   const [decisionsRefreshKey, setDecisionsRefreshKey] = useState(0);
+  const hasFetchedOrders = useRef(false);
+  const prevOrderIdsRef = useRef<Set<string> | null>(null);
+  const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (hasFetchedOrders.current) return;
+    hasFetchedOrders.current = true;
+    getOrders(200)
+      .then((res) => addOrders(res.orders))
+      .catch(() => {
+        // Cold-start seeding is a nice-to-have -- if it fails, the feed
+        // just starts empty as before, same as if the API were briefly down.
+      });
+  }, [addOrders]);
+
+  // Slide-in animation for rows that newly appear in the feed (cold-start
+  // load, manual score submission, or a simulated batch arriving via SSE
+  // while this page is mounted) -- but not for rows already present on
+  // first mount (e.g. restored from sessionStorage or from a simulate run
+  // on another page before navigating here).
+  useEffect(() => {
+    const currentIds = new Set(orders.map((o) => o.order_id));
+    if (prevOrderIdsRef.current === null) {
+      prevOrderIdsRef.current = currentIds;
+      return;
+    }
+    const added = orders.filter((o) => !prevOrderIdsRef.current!.has(o.order_id)).map((o) => o.order_id);
+    prevOrderIdsRef.current = currentIds;
+    if (added.length === 0) return;
+    setNewOrderIds(new Set(added));
+    const t = setTimeout(() => setNewOrderIds(new Set()), 600);
+    return () => clearTimeout(t);
+  }, [orders]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -332,7 +411,9 @@ export default function DashboardPage() {
                     <tr
                       key={order.order_id}
                       onClick={() => selectOrder(order)}
-                      className="cursor-pointer border-b text-sm transition-colors last:border-0"
+                      className={`cursor-pointer border-b text-sm transition-colors last:border-0${
+                        newOrderIds.has(order.order_id) ? " animate-in" : ""
+                      }`}
                       style={{
                         borderColor: "var(--gridline)",
                         background: selectedOrder?.order_id === order.order_id ? "var(--series-1-soft)" : "transparent",

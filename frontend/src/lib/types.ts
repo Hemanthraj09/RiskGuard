@@ -56,8 +56,13 @@ export interface ScoredOrder {
   recommendation: Recommendation;
   recommended_action: string;
   optimal_threshold: number;
-  top_contributors: ShapContributor[];
-  customer_features: CustomerFeatures;
+  // Null for orders repopulated via GET /orders (cold-start dashboard load):
+  // reconstructing these would require re-running feature computation and
+  // SHAP against the order's original scoring-time history, which GET
+  // /orders deliberately skips. Always present on /score and /simulate
+  // responses.
+  top_contributors: ShapContributor[] | null;
+  customer_features: CustomerFeatures | null;
 }
 
 export interface SimulateResponse {

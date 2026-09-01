@@ -25,6 +25,14 @@ export function simulateOrders(n: number, riskShift: number): Promise<SimulateRe
   });
 }
 
+export function simulateStreamUrl(n: number, riskShift: number): string {
+  return `${BASE_URL}/simulate/stream?n=${n}&risk_shift=${riskShift}`;
+}
+
+export function getOrders(limit = 200): Promise<{ orders: ScoredOrder[] }> {
+  return request(`/orders?limit=${limit}`);
+}
+
 export interface ScoreRequestBody {
   order_value: number;
   product_category: string;
