@@ -6,7 +6,7 @@ Generates ~12,000 e-commerce orders across ~2,500 customers with:
 - Temporal features computed strictly from past orders (no leakage)
 - Labels from the locked function in Section 5.2 of the spec
 - 6% label noise to cap achievable AUC at realistic levels
-- Temporal train/test split (80/20 by timestamp)
+- Temporal 3-way split (65% train / 15% validation / 20% test by timestamp; validation selects the cost-optimal threshold, test is never touched until final reporting)
 
 All random processes use fixed seeds for reproducibility (Section 5.4).
 """

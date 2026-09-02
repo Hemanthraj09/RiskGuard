@@ -45,6 +45,7 @@ from sklearn.metrics import (
     roc_auc_score,
     roc_curve,
     precision_recall_curve,
+    average_precision_score,
     brier_score_loss,
 )
 from sklearn.calibration import calibration_curve
@@ -481,6 +482,16 @@ def main():
     roc_auc = roc_auc_score(y_test, test_prob)
     print(f"      Test ROC-AUC: {roc_auc:.4f}")
 
+    # PR-AUC (average precision): the area under the precision-recall curve,
+    # summarized as one number the same way ROC-AUC summarizes the ROC curve.
+    # More informative than ROC-AUC as a single ranking-quality number on an
+    # imbalanced problem like this one (22% positive rate) -- ROC-AUC can look
+    # deceptively strong when negatives dominate, since a low false-positive
+    # RATE is easy to achieve by construction. The PR curve itself was already
+    # computed and shown on the dashboard; this just gives it a headline number.
+    pr_auc = average_precision_score(y_test, test_prob)
+    print(f"      Test PR-AUC (average precision): {pr_auc:.4f}")
+
     # ── Reconcile the Bayes-optimal ceiling to one number, on this exact
     # test split. `return_probability` is the true generative probability
     # saved by data/generate_data.py (not a model feature); scoring it
@@ -613,6 +624,7 @@ def main():
         "validation_positive_rate": round(float(y_val.mean()), 4),
 
         "roc_auc": round(float(roc_auc), 4),
+        "pr_auc": round(float(pr_auc), 4),
         "bayes_optimal_ceiling_auc": ceiling_auc,
         "calibration_sanity_check": calibration_sanity_check,
         "brier_score": round(float(brier), 4),
@@ -695,6 +707,7 @@ def main():
           f"{calibration_sanity_check['actual_positive_rate']:.4f} "
           f"(raw was {calibration_sanity_check['mean_raw_probability']:.4f})")
     print(f"ROC-AUC (test):            {roc_auc:.4f}  95% CI {ci['roc_auc_ci']}")
+    print(f"PR-AUC (test):             {pr_auc:.4f}")
     print(f"  vs. logistic regression: {lr_baseline['test_auc']:.4f}")
     print(f"Brier score (test):        {brier:.4f}")
     print(f"ECE (test):                {ece:.4f}")

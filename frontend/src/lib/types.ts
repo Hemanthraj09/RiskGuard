@@ -106,6 +106,7 @@ export interface EvalResults {
   positive_rate: number;
   validation_positive_rate: number;
   roc_auc: number;
+  pr_auc: number;
   bayes_optimal_ceiling_auc: number;
   brier_score: number;
   ece: number;

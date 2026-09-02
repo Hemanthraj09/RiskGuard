@@ -103,5 +103,7 @@
   "validation_positive_rate": 0.21334792122538293,
   "raw_train_auc": 0.7536,
   "raw_validation_auc": 0.7389,
-  "calibrated_validation_auc": 0.7474
+  "calibrated_validation_auc": 0.7422,
+  "calibrator": "BaggedIsotonicCalibrator(n_bags=50, seed=42)",
+  "comparison_single_isotonic_validation_auc": 0.7474
 }

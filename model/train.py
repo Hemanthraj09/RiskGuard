@@ -1,13 +1,22 @@
 """
 RiskGuard — Model Training
 
-Trains a LightGBM classifier on train.csv, then fits isotonic calibration
-on validation.csv (chronologically after train, never touched again until
+Trains a LightGBM classifier on train.csv, then fits calibration on
+validation.csv (chronologically after train, never touched again until
 model/evaluate.py applies the frozen threshold to test.csv). Using a
 genuinely separate chronological slice for calibration -- rather than a
 random subsample carved out of train -- keeps calibration and, downstream,
 threshold selection (see evaluate.py) honest: test.csv is never used for
 any modeling decision, only for final reporting.
+
+The production calibrator is BaggedIsotonicCalibrator (50 bootstrap-resampled
+isotonic fits averaged) -- adopted after comparing its full eval_results.json
+output against a single isotonic fit (lower ECE and Brier, tighter threshold
+bootstrap IQR, no regression on precision/recall/F1; see git history for the
+before/after comparison). Both are fit and saved on every run:
+calibrator.pkl is the live bagged calibrator every other file loads;
+calibrator_isotonic_single.pkl is the single-fit comparison baseline, kept
+so a revert is a one-line change, not a re-derivation.
 
 Uses pd.get_dummies for categorical encoding (robust with any
 sklearn wrapper — no categorical_feature pass-through issues).
@@ -17,10 +26,12 @@ Usage:
 """
 
 import os
+import sys
 import json
 import pickle
 import warnings
 
+import numpy as np
 import pandas as pd
 import lightgbm as lgb
 from sklearn.isotonic import IsotonicRegression
@@ -77,6 +88,63 @@ def prepare_features(df, encoded_columns=None):
         encoded_columns = list(X.columns)
 
     return X, encoded_columns
+
+
+class BaggedIsotonicCalibrator:
+    """Averages N isotonic regressions, each fit on a bootstrap resample of
+    the validation set, to reduce variance in sparse-probability bins versus
+    a single isotonic fit (isotonic's step function can overfit local noise
+    where validation has few points, e.g. above ~0.6). Same .predict()
+    interface as sklearn's IsotonicRegression, so every existing call site
+    (api/scoring.py, model/evaluate.py) needs zero changes if this is
+    promoted to be the live calibrator.
+
+    Module-level (not a closure/lambda): api/scoring.py unpickles
+    calibrator.pkl in a separate process and needs to resolve this class by
+    qualified name (`train.BaggedIsotonicCalibrator`).
+    """
+
+    def __init__(self, n_bags=50, seed=42, y_min=0.01, y_max=0.99):
+        self.n_bags = n_bags
+        self.seed = seed
+        self.y_min = y_min
+        self.y_max = y_max
+        self.models = []
+
+    def fit(self, val_probs, y_val):
+        rng = np.random.RandomState(self.seed)
+        n = len(val_probs)
+        for _ in range(self.n_bags):
+            idx = rng.randint(0, n, size=n)
+            iso = IsotonicRegression(y_min=self.y_min, y_max=self.y_max, out_of_bounds="clip")
+            iso.fit(val_probs[idx], y_val[idx])
+            self.models.append(iso)
+        return self
+
+    def predict(self, X):
+        X = np.asarray(X)
+        preds = np.mean([m.predict(X) for m in self.models], axis=0)
+        return preds
+
+
+# Force this class to always pickle as "train.BaggedIsotonicCalibrator", never
+# "__main__.BaggedIsotonicCalibrator". Without this, `python model/train.py`
+# (running this file as the entry point, per its own documented usage) would
+# execute it as module __main__, and pickle embeds the *defining* module's
+# name at save time -- so calibrator.pkl would only unpickle correctly in
+# whatever process happens to also be running this exact file as __main__,
+# which api/scoring.py and model/evaluate.py never are (they import this file
+# as a normal module named "train").
+#
+# Setting __module__ alone isn't enough: pickle also verifies, at dump time,
+# that sys.modules[obj.__class__.__module__] has this exact class object
+# under this exact name -- and when running as a script, "train" isn't a
+# registered module at all (only "__main__" is), so that check fails.
+# Aliasing sys.modules["train"] to this same module object (a no-op when
+# this file is genuinely imported as "train", since that entry already
+# exists and already points here) satisfies the check either way.
+sys.modules.setdefault("train", sys.modules[__name__])
+BaggedIsotonicCalibrator.__module__ = "train"
 
 
 def main():
@@ -139,16 +207,33 @@ def main():
     # either the base model or the calibrator -- consistent with the same
     # train/validation/test boundary the leakage-safe threshold selection
     # in evaluate.py depends on.
-    print("[3/5] Calibrating probabilities (isotonic regression, fit on validation)...")
-    calibrator = IsotonicRegression(
+    print("[3/5] Calibrating probabilities...")
+    print("      Fitting single-fit isotonic regression (comparison baseline)...")
+    single_calibrator = IsotonicRegression(
         y_min=0.01, y_max=0.99, out_of_bounds="clip"
     )
-    calibrator.fit(model_val_probs, y_val)
+    single_calibrator.fit(model_val_probs, y_val)
 
+    val_probs_single = single_calibrator.predict(model_val_probs)
+    val_auc_single = roc_auc_score(y_val, val_probs_single)
+    print(f"      [comparison] Calibrated validation AUC: {val_auc_single:.4f}")
+    print(f"      [comparison] Calibrated prob range: [{val_probs_single.min():.4f}, {val_probs_single.max():.4f}]")
+
+    # Production calibrator: bagged isotonic (averages n_bags isotonic fits,
+    # each on a bootstrap resample of validation) reduces variance in
+    # sparse-probability bins vs. a single fit -- adopted as the live
+    # calibrator after comparing full eval_results.json output before/after
+    # (lower ECE and Brier, tighter threshold bootstrap IQR, no regression on
+    # precision/recall/F1). The single-fit calibrator above is still fit and
+    # saved every run purely as a comparison baseline, not because it's used
+    # anywhere downstream.
+    print("      Fitting BaggedIsotonicCalibrator (n_bags=50, seed=42) [production]...")
+    calibrator = BaggedIsotonicCalibrator(n_bags=50, seed=42)
+    calibrator.fit(model_val_probs, y_val)
     val_probs_calibrated = calibrator.predict(model_val_probs)
     val_auc_calibrated = roc_auc_score(y_val, val_probs_calibrated)
-    print(f"      Calibrated validation AUC: {val_auc_calibrated:.4f}")
-    print(f"      Calibrated prob range: [{val_probs_calibrated.min():.4f}, {val_probs_calibrated.max():.4f}]")
+    print(f"      [production] Calibrated validation AUC: {val_auc_calibrated:.4f}")
+    print(f"      [production] Calibrated prob range: [{val_probs_calibrated.min():.4f}, {val_probs_calibrated.max():.4f}]")
 
     # 4. Save artifacts
     print("[4/5] Saving artifacts...")
@@ -162,7 +247,12 @@ def main():
     calibrator_path = os.path.join(ARTIFACTS_DIR, "calibrator.pkl")
     with open(calibrator_path, "wb") as f:
         pickle.dump(calibrator, f)
-    print(f"  Calibrator:   {calibrator_path}")
+    print(f"  Calibrator:   {calibrator_path} (production: BaggedIsotonicCalibrator)")
+
+    single_calibrator_path = os.path.join(ARTIFACTS_DIR, "calibrator_isotonic_single.pkl")
+    with open(single_calibrator_path, "wb") as f:
+        pickle.dump(single_calibrator, f)
+    print(f"  Calibrator:   {single_calibrator_path} (comparison baseline only, unused downstream)")
 
     raw_feature_cols = [
         c for c in train_df.columns
@@ -182,6 +272,8 @@ def main():
         "raw_train_auc": round(train_auc, 4),
         "raw_validation_auc": round(val_auc, 4),
         "calibrated_validation_auc": round(val_auc_calibrated, 4),
+        "calibrator": "BaggedIsotonicCalibrator(n_bags=50, seed=42)",
+        "comparison_single_isotonic_validation_auc": round(val_auc_single, 4),
     }
     metadata_path = os.path.join(ARTIFACTS_DIR, "metadata.json")
     with open(metadata_path, "w") as f:

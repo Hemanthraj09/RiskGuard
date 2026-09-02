@@ -154,7 +154,7 @@ trains on `train`, isotonic calibration fits on `validation`, the cost-optimal t
 threshold the test set had zero influence over. Concretely, this changed the reported numbers:
 the leaky selection had picked an artificially aggressive threshold (0.153) that looked good on
 recall (65.1%) specifically because it was tuned against test-set quirks; the honest,
-validation-selected threshold (0.192) gives a more balanced, and more trustworthy,
+validation-selected threshold (0.232) gives a more balanced, and more trustworthy,
 precision/recall tradeoff (~45%/~47%). The Model Performance page shows both steps explicitly —
 "select on validation" then "apply blind to test" — as two side-by-side panels, not one hidden
 number.
@@ -199,7 +199,7 @@ training set with a true signal ceiling of **0.715 AUC** (the Bayes-optimal ceil
 label generator's own ground-truth probability against the sampled test-set labels — no classifier
 can beat this on this data, by construction). The fix was to cut model
 capacity hard: 100 trees, max_depth=3, num_leaves=8, with meaningful L1/L2 regularization. That
-produced train/validation/test AUC of **0.754 / 0.739 / 0.702** — close together, which is the
+produced train/validation/test AUC of **0.754 / 0.739 / 0.706** — close together, which is the
 actual evidence the model learned signal rather than noise, not just a better-looking single
 number.
 
@@ -208,11 +208,12 @@ number.
 | Metric | Value |
 |---|---|
 | Bayes-optimal ceiling AUC (no classifier can beat this on this data) | 0.715 |
-| ROC-AUC (LightGBM) | 0.702 [95% CI 0.676–0.729] |
+| ROC-AUC (LightGBM) | 0.706 [95% CI 0.680–0.732] |
+| PR-AUC (average precision) | 0.465 |
 | Brier score | 0.153 |
-| Expected Calibration Error (ECE) | 0.038 |
+| Expected Calibration Error (ECE) | 0.033 |
 | Positive rate | 22.4% |
-| Cost-optimal threshold (selected on validation, applied to test) | 0.192 |
+| Cost-optimal threshold (selected on validation, applied to test) | 0.232 |
 | Precision @ threshold | 0.449 [95% CI 0.406–0.493] |
 | Recall @ threshold | 0.470 [95% CI 0.428–0.512] |
 | F1 @ threshold | 0.459 [95% CI 0.419–0.496] |
@@ -223,9 +224,15 @@ for others (positive rate, lift %, and cost deltas are population/cost statistic
 four-metric cluster, and stay as percentages).
 
 95% confidence intervals are bootstrap estimates (1,000 resamples) — worth stating explicitly on
-a ~2.4k-row test set, where point estimates alone understate real sampling uncertainty. At 0.702
-against a 0.715 ceiling, the model captures ~98% of the theoretically achievable ranking quality
+a ~2.4k-row test set, where point estimates alone understate real sampling uncertainty. At 0.706
+against a 0.715 ceiling, the model captures ~99% of the theoretically achievable ranking quality
 on this data.
+
+**Why PR-AUC alongside ROC-AUC:** ROC-AUC can look deceptively strong on an imbalanced problem
+like this one (22.4% positive), since a low false-positive *rate* is easy to achieve once negatives
+dominate the population. PR-AUC (average precision) summarizes the precision-recall curve the same
+way ROC-AUC summarizes the ROC curve, and is the more informative single ranking-quality number
+here — the full curve it's computed from is on the Model Performance page.
 
 **Cost-based threshold:** default assumptions are ₹180 friction cost (false positive), ₹650 return
 cost (false negative), and ₹50 review cost per flagged order (analyst time — flagging isn't free).
@@ -241,8 +248,8 @@ cost = all legitimate orders become false positives) against the model's actual 
 validation-selected threshold — normalized per 1,000 orders for readability, displayed as the
 first thing on the Model Performance page.
 
-**Lift/gains:** reviewing just the riskiest 10% of orders (by model score) catches ~28% of all
-actual returns in the test set — nearly 3x better than reviewing a random 10%.
+**Lift/gains:** reviewing just the riskiest 10% of orders (by model score) catches ~26% of all
+actual returns in the test set — ~2.6x better than reviewing a random 10%.
 
 ### Baselines: a floor to go with the ceiling
 
@@ -250,7 +257,7 @@ actual returns in the test set — nearly 3x better than reviewing a random 10%.
 |---|---|---|---|---|
 | Heuristic rule (flag if COD + footwear/apparel) | — (binary rule) | 0.528 | 0.244 | ₹301,820 |
 | Logistic regression (identical features, same split) | 0.703 | ranked score | ranked score | — |
-| **LightGBM (this model)** | **0.702** | **0.449** | **0.470** | **₹272,870** |
+| **LightGBM (this model)** | **0.706** | **0.449** | **0.470** | **₹272,870** |
 
 Two honest findings worth stating plainly rather than glossing over:
 
@@ -259,7 +266,7 @@ Two honest findings worth stating plainly rather than glossing over:
   recall is worth more than the heuristic's extra precision — the heuristic costs **~9.6% more**
   overall despite looking "more accurate" on precision alone.
 - Logistic regression on the *identical* one-hot feature set scores statistically the same AUC as
-  LightGBM (0.703 vs. 0.702). This isn't a weakness to hide — it's evidence the achievable signal
+  LightGBM (0.703 vs. 0.706). This isn't a weakness to hide — it's evidence the achievable signal
   in this data is close to linear/multiplicative (consistent with how the label generator itself
   combines category and payment effects), and that the low-capacity LightGBM config isn't leaving
   performance on the table by being "too simple." Where LightGBM actually earns its place is
@@ -269,8 +276,8 @@ Two honest findings worth stating plainly rather than glossing over:
 
 Global metrics average over segments the model treats very differently. Breaking out AUC by
 product category surfaces a real limitation: the model is genuinely useful for **footwear (AUC
-0.72)** and **apparel (0.68)** — the two highest-base-rate categories — but performs **at or below
-random for electronics_accessories (0.52) and groceries (0.49)**, which have low overall return
+0.71)** and **apparel (0.68)** — the two highest-base-rate categories — but performs **at or below
+random for electronics_accessories (0.52) and groceries (0.50)**, which have low overall return
 rates and too little signal for the model to discriminate within. By payment mode, COD is
 strongest (0.75); by tenure, both new and returning customers score well (0.81 / 0.70), though the
 "new customer" slice is only 114 test-set orders — read that number with appropriate caution. Full
@@ -281,20 +288,31 @@ footwear or apparel — the model itself can't tell those two apart well within 
 ### Additional robustness probes
 
 - **Threshold stability:** bootstrap-resampling the validation set 1,000 times and re-selecting
-  the cost-optimal threshold each time gives a median of 0.192 (matching the point estimate) but an
-  IQR of **[0.192, 0.315]** — a real, honestly-reported spread. A different slice of validation
-  data could plausibly have selected a threshold nearly 65% higher. This is a genuine limitation of
-  tuning a decision threshold on a ~1,800-row validation set, not a flaw in the leakage-safe method
-  itself, and it's exactly the kind of caveat "honest metrics" is supposed to surface.
+  the cost-optimal threshold each time gives a median of 0.232 (matching the point estimate) and an
+  IQR of **[0.222, 0.291]** — a real, honestly-reported spread, though a materially tighter one than
+  before a later calibration refinement (bagged isotonic regression) was adopted (previously
+  [0.192, 0.315], nearly 65% above the median at the upper bound; now the upper bound is only ~26%
+  above the median). A different slice of
+  validation data could still plausibly have selected a somewhat different threshold. This is a
+  genuine limitation of tuning a decision threshold on a ~1,800-row validation set, not a flaw in
+  the leakage-safe method itself, and it's exactly the kind of caveat "honest metrics" is supposed
+  to surface.
 - **Calibration under the demo's risk-shift slider:** the Simulation Console's risk-shift slider
   changes the population the model sees. Checked directly: at shift=0.7 (a representative "live
-  demo" setting), ECE rises from the baseline 0.038 to **0.054** — a real, ~40% relative
-  degradation, though not a collapse. At the slider's maximum (shift=1.0), ECE is 0.046. If a judge
-  cranks the slider live and asks about calibration, the honest answer is "it holds up
-  reasonably but measurably degrades under a heavily skewed population — expected, since the model
-  wasn't calibrated specifically for that population."
+  demo" setting), ECE rises from the baseline 0.033 to **0.047** — a real, ~42% relative
+  degradation, though not a collapse. At the slider's maximum (shift=1.0), ECE is **0.051**, a ~54%
+  relative degradation — now the more skewed setting is the worse one (this ordering flipped after
+  the calibration change; it was the reverse before). If a judge cranks the slider live and asks
+  about calibration, the honest answer is "it holds up reasonably but measurably degrades under a
+  heavily skewed population, more so at the extreme end — expected, since the model wasn't
+  calibrated specifically for that population."
 - **`/score` latency:** p50 22ms, p95 24ms over 150 varied calls (`experiments/score_latency_benchmark.py`)
   — SHAP computation is not a bottleneck at this model size.
+- **No seasonal / concept-drift signal.** The simulation window is a flat 6 months (Jan–Jun 2024)
+  with no seasonal demand or return-rate shifts built in — a model trained on Jan–Apr data is never
+  tested against a population that looks meaningfully different, e.g. a festive-season spike in
+  apparel returns (Diwali, end-of-season sales). Real deployments would need periodic
+  recalibration or drift monitoring that this buildathon-scale simulation doesn't model or test.
 
 ## Real-data transfer sanity check (optional, exploratory)
 

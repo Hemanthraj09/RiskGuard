@@ -111,8 +111,9 @@ export default function PerformancePage() {
       </div>
 
       <div>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
           <StatTile label="ROC-AUC" value={metrics.roc_auc.toFixed(3)} />
+          <StatTile label="PR-AUC" value={metrics.pr_auc.toFixed(3)} sublabel="Avg. precision" />
           <StatTile label="Ceiling AUC" value={metrics.bayes_optimal_ceiling_auc.toFixed(3)} sublabel="Bayes-optimal" />
           <StatTile
             label="Ceiling captured"
@@ -378,7 +379,9 @@ export default function PerformancePage() {
             Precision-recall curve
           </h2>
           <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            More informative than ROC on this imbalanced ({pct(metrics.positive_rate)} positive) problem.
+            PR-AUC (average precision): <strong style={{ color: "var(--text-primary)" }}>{dec(metrics.pr_auc)}</strong> &mdash;
+            more informative than ROC-AUC as a single ranking-quality number on this imbalanced
+            ({pct(metrics.positive_rate)} positive) problem.
           </p>
           <PrCurveChart
             precision={metrics.pr_curve.precision}
