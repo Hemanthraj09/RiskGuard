@@ -185,7 +185,7 @@ function DecisionButtons({ order, onDecided }: { order: ScoredOrder; onDecided: 
       {recorded && (
         <p className="mt-1.5 text-xs" style={{ color: "var(--text-muted)" }}>
           Decision recorded: <strong style={{ color: "var(--text-secondary)" }}>{recorded.decision.replace(/_/g, " ")}</strong>{" "}
-          at {new Date(recorded.decided_at).toLocaleTimeString()}. Logged below &mdash; clicking again records a new entry.
+          at {new Date(recorded.decided_at + "Z").toLocaleTimeString()}. Logged below &mdash; clicking again records a new entry.
         </p>
       )}
       {error && <p className="mt-1.5 text-xs" style={{ color: "var(--status-critical)" }}>{error}</p>}
