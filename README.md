@@ -84,6 +84,7 @@ riskguard/
 │   └── simulate_gen.py           # risk-shift-aware synthetic order generator
 ├── experiments/                   # standalone analyses, not wired into the product
 │   ├── uci_transfer_check.py       # real-data transfer check + leak-check diagnostic
+│   ├── http_score_parity_check.py  # real HTTP round-trip train/serve parity check
 │   └── score_latency_benchmark.py  # POST /score p50/p95 latency
 └── frontend/                     # Next.js 16 (App Router) dashboard
 ```

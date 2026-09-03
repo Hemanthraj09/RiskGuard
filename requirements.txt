@@ -6,3 +6,4 @@ pandas>=3.0
 scikit-learn>=1.8
 lightgbm>=4.7
 shap>=0.52
+pytest>=9.1
