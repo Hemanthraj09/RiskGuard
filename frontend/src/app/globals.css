@@ -52,6 +52,25 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Native <select> dropdown popups are rendered by the OS/browser as a
+   separate widget, not part of normal page layout -- `color-scheme: dark`
+   on :root isn't reliably enough to keep that popup dark once the <select>
+   itself has any author-set background/border (as ours do via Tailwind
+   classes). Setting color-scheme directly on the element plus explicit
+   colors on its <option> children is what actually keeps the open dropdown
+   list dark and readable instead of falling back to the browser's light
+   default. */
+select {
+  color-scheme: dark;
+  background-color: var(--surface-raised);
+  color: var(--text-primary);
+}
+
+select option {
+  background-color: var(--surface-raised);
+  color: var(--text-primary);
+}
+
 @keyframes fadeSlideIn {
   from {
     opacity: 0;

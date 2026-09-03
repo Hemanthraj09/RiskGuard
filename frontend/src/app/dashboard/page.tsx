@@ -198,7 +198,7 @@ function OrderDetail({ order, onDecided }: { order: ScoredOrder; onDecided: () =
   const maxAbs = Math.max(...contributors.map((c) => Math.abs(c.shap_value)), 0.0001);
 
   return (
-    <div className="panel sticky top-6 p-5">
+    <div className="panel p-5">
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>
@@ -371,30 +371,40 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
-            Risk Analyst Dashboard
-          </h1>
-          <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
-            Live-scored order feed. Click any order for its SHAP-based explanation.
-          </p>
+      {/* Bounded to the viewport (minus NavBar + this <main>'s padding) only at
+          lg: and up, matching the breakpoint where the grid below becomes two
+          side-by-side columns. Below lg everything reverts to plain, unbounded
+          stacked flow -- a fixed-height two-pane workspace only makes sense
+          once there's room for two panes side by side. The header row is
+          `shrink-0` (always its natural height, whether the score form is
+          open or not) and the grid is `flex-1` so it gets exactly whatever
+          height remains -- no need to separately estimate the header row's
+          own (variable) height. */}
+      <div className="flex flex-col gap-6 lg:h-[calc(100vh-130px)] lg:min-h-0">
+        <div className="flex shrink-0 flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-semibold" style={{ color: "var(--text-primary)" }}>
+              Risk Analyst Dashboard
+            </h1>
+            <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
+              Live-scored order feed. Click any order for its SHAP-based explanation.
+            </p>
+          </div>
+          <ManualScoreForm onScored={(o) => { addOrders([o]); selectOrder(o); }} />
         </div>
-        <ManualScoreForm onScored={(o) => { addOrders([o]); selectOrder(o); }} />
-      </div>
 
-      {orders.length === 0 ? (
-        <div className="panel p-10 text-center text-sm" style={{ color: "var(--text-muted)" }}>
-          No orders yet.{" "}
-          <Link href="/simulate" className="font-medium underline" style={{ color: "var(--series-1)" }}>
-            Generate a batch in the Simulation Console
-          </Link>{" "}
-          to populate the live feed.
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_360px]">
-          <div className="panel overflow-hidden">
-            <div className="max-h-[70vh] overflow-y-auto">
+        {orders.length === 0 ? (
+          <div className="panel p-10 text-center text-sm" style={{ color: "var(--text-muted)" }}>
+            No orders yet.{" "}
+            <Link href="/simulate" className="font-medium underline" style={{ color: "var(--series-1)" }}>
+              Generate a batch in the Simulation Console
+            </Link>{" "}
+            to populate the live feed.
+          </div>
+        ) : (
+        <div className="grid grid-cols-1 gap-6 lg:min-h-0 lg:flex-1 lg:grid-cols-[1fr_360px]">
+          <div className="panel flex flex-col overflow-hidden lg:min-h-0">
+            <div className="overflow-y-auto lg:min-h-0 lg:flex-1">
               <table className="w-full text-sm">
                 <thead className="sticky top-0" style={{ background: "var(--surface-raised)" }}>
                   <tr className="border-b text-left text-xs" style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}>
@@ -441,7 +451,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div>
+          <div className="overflow-y-auto lg:h-full lg:min-h-0">
             {selectedOrder ? (
               <OrderDetail order={selectedOrder} onDecided={() => setDecisionsRefreshKey((k) => k + 1)} />
             ) : (
@@ -451,7 +461,8 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
-      )}
+        )}
+      </div>
 
       <DecisionsLog refreshKey={decisionsRefreshKey} />
     </div>
