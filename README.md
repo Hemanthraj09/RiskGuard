@@ -1,23 +1,52 @@
 # RiskGuard — AI Risk Manager (Razorpay Buildathon, Track 02)
 
-A return-risk scorer for e-commerce orders: given an order's category, payment mode, value,
-delivery tier, and the customer's purchase history, RiskGuard predicts a calibrated probability
-that the order will be returned, and recommends whether to accept it normally or flag it for
-verification — using a cost-based threshold, not an arbitrary 0.5 cutoff.
+Every returned e-commerce order costs money twice — once in fulfillment, once in reverse
+logistics — and with COD still dominant in Indian e-commerce, that cost is locked in before the
+courier even leaves the warehouse. RiskGuard predicts, at the moment an order is placed, a
+calibrated probability that it will be returned, using the order's category, payment mode, value,
+delivery tier, and the customer's own purchase history, then recommends whether to accept it
+normally or flag it for verification — using a cost-based threshold, not an arbitrary 0.5 cutoff.
 
 **RiskGuard recommends; it never autonomously blocks, denies, or refunds an order. Every action
 requires a human in the loop.**
 
 **Track 02 brief:** *"Build a working detector, verifier, or auto-responder for one class of
 loss, with measured precision and recall on a held-out test set."* Judging bar: *"Honest metrics
-including false-positive cost. Strictly defense-only."*
+including false-positive cost. Strictly defense-only."* RiskGuard covers all three roles: the
+calibrated model is the **detector**, the rule-based suggested action is the **responder**, and
+the logged analyst decision (confirm / flag, see "The verifier" section below) is the
+**verifier**.
 
 There is no policy engine, no approval workflow, and no execution path — including the rule-based
 "suggested action" in the dashboard, which is a printed suggestion, not a triggered action.
 
 ---
 
-## Architecture diagram
+## At a glance
+
+- **Test ROC-AUC 0.706** against a Bayes-optimal ceiling of 0.715 — the model captures ~99% of the
+  theoretically recoverable signal in this data, not just a good-looking number in isolation.
+- **Saves ₹33,394 per 1,000 orders vs. flagging nothing, and ₹77,776 per 1,000 vs. flagging
+  everything** — at a cost-optimal threshold computed from real friction/return/review costs, not
+  an arbitrary cutoff.
+- **The threshold was almost picked dishonestly.** An early pass selected it against the same test
+  set it then reported results on. Caught, fixed with a proper train/validation/test split — full
+  story in "Methodology hardening" below.
+
+The three lines above are the fast version. Full metrics, baselines, segment breakdowns, and
+confidence intervals are in "Model performance" further down.
+
+---
+
+## Why Return-Risk Scorer
+
+Of Track 02's four suggested sub-problems, this one has the cleanest ground-truth story
+(return/no-return is an unambiguous supervised label), the clearest false-positive-cost tradeoff
+(friction cost on a flagged legitimate order vs. reverse-logistics cost on a missed return), and
+calibration is directly checkable — if the model says "70% return probability," we can verify
+~70% of orders scored in that band actually returned, on held-out data.
+
+## Architecture
 
 ```mermaid
 flowchart LR
@@ -41,18 +70,6 @@ flowchart LR
         SIM -.risk-shifted synthetic orders.-> DASH
     end
 ```
-
----
-
-## Why Return-Risk Scorer
-
-Of Track 02's four suggested sub-problems, this one has the cleanest ground-truth story
-(return/no-return is an unambiguous supervised label), the clearest false-positive-cost tradeoff
-(friction cost on a flagged legitimate order vs. reverse-logistics cost on a missed return), and
-calibration is directly checkable — if the model says "70% return probability," we can verify
-~70% of orders scored in that band actually returned, on held-out data.
-
-## Architecture
 
 Two lean roles, no full e-commerce platform:
 
