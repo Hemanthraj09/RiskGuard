@@ -110,6 +110,11 @@ def _score_and_persist(conn, customer_id: str, customer_record: dict, past_order
         customer_record, past_orders, order_timestamp, order_fields["order_value"]
     )
     result = scoring.score_order(order_fields, customer_features)
+    # Added for display only, after scoring -- not a model input (score_order's
+    # _build_raw_row reads named keys, so this can't leak into the feature row).
+    # True only if at least one past order has a known outcome; when False,
+    # bayesian_return_rate is the population prior, not this customer's history.
+    customer_features["has_return_history"] = any(o.get("returned") is not None for o in past_orders)
 
     db.insert_order(conn, {
         "order_id": order_id,
@@ -225,6 +230,7 @@ def _simulate_batch(conn, n: int, risk_shift: float):
             record, past_orders, order_timestamp, order_fields["order_value"]
         )
         result = scoring.score_order(order_fields, customer_features)
+        customer_features["has_return_history"] = any(o.get("returned") is not None for o in past_orders)
 
         order_id = f"SIMORD{seq_start + i:07d}"
         pending_orders.append({

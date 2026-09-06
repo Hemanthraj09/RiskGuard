@@ -262,6 +262,11 @@ function OrderDetail({ order, onDecided }: { order: ScoredOrder; onDecided: () =
             <dd className="tabular text-right" style={{ color: "var(--text-primary)" }}>
               {(order.customer_features.bayesian_return_rate * 100).toFixed(1)}%
             </dd>
+            {!order.customer_features.has_return_history && (
+              <p className="col-span-2 -mt-1 text-xs" style={{ color: "var(--text-muted)" }}>
+                Population average &mdash; no resolved order history for this customer yet.
+              </p>
+            )}
             <dt style={{ color: "var(--text-muted)" }}>Returns (30d / 90d)</dt>
             <dd className="tabular text-right" style={{ color: "var(--text-primary)" }}>
               {order.customer_features.returns_last_30d} / {order.customer_features.returns_last_90d}

@@ -91,7 +91,7 @@ riskguard/
 
 ## Running it
 
-**Backend** (Python 3.13, from `riskguard/`):
+**Backend** (Python 3.13+, from `riskguard/`):
 
 ```bash
 python data/generate_data.py      # regenerate synthetic data (fixed seed, deterministic)

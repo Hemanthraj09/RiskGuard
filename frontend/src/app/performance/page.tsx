@@ -166,12 +166,12 @@ export default function PerformancePage() {
         <StatTile
           label="Precision"
           value={ciLabel(testEntry.precision, tm.precision_ci, dec)}
-          sublabel="At frozen threshold, on test"
+          sublabel="Cost-optimized, not maximized"
         />
         <StatTile
           label="Recall"
           value={ciLabel(testEntry.recall, tm.recall_ci, dec)}
-          sublabel="At frozen threshold, on test"
+          sublabel="Cost-optimized, not maximized"
         />
         <StatTile
           label="F1"

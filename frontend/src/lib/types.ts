@@ -33,6 +33,7 @@ export interface ShapContributor {
 }
 
 export interface CustomerFeatures {
+  has_return_history: boolean;
   bayesian_return_rate: number;
   customer_purchase_frequency: number;
   account_age_days: number;
