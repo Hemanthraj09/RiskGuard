@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
-import { simulateStreamUrl } from "@/lib/api";
-import type { RiskBand, ScoredOrder } from "@/lib/types";
+import type { RiskBand } from "@/lib/types";
 import { useOrders } from "@/context/OrdersContext";
 
 const BAND_COLOR: Record<RiskBand, string> = {
@@ -12,49 +11,29 @@ const BAND_COLOR: Record<RiskBand, string> = {
   high: "var(--status-critical)",
 };
 
-export default function SimulatePage() {
-  const { addOrders } = useOrders();
-  const [n, setN] = useState(100);
-  const [riskShift, setRiskShift] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [received, setReceived] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [lastBatch, setLastBatch] = useState<{ bandCounts: Record<RiskBand, number>; total: number } | null>(null);
-  const sourceRef = useRef<EventSource | null>(null);
+const DEFAULT_ORDERS = 100;
+const MAX_ORDERS = 500;
 
-  useEffect(() => () => sourceRef.current?.close(), []);
+function parseOrderCount(text: string): number {
+  const value = Math.round(Number(text));
+  return Number.isFinite(value) && value >= 1 ? Math.min(MAX_ORDERS, value) : DEFAULT_ORDERS;
+}
+
+export default function SimulatePage() {
+  const { simulation, startSimulation } = useOrders();
+  // Raw text, so the field can be cleared and retyped; parsed and clamped to
+  // 1-500 on blur and on submit.
+  const [countText, setCountText] = useState(String(DEFAULT_ORDERS));
+  const [riskShift, setRiskShift] = useState(0);
+  const n = parseOrderCount(countText);
+  const running = simulation?.running ?? false;
+  // Band counts arrive with the final "done" event, i.e. once the batch is saved.
+  const lastCounts = simulation && !simulation.running ? simulation.bandCounts : null;
+  const lastTotal = simulation?.received ?? 0;
 
   function handleGenerate() {
-    sourceRef.current?.close();
-    setLoading(true);
-    setError(null);
-    setReceived(0);
-    setLastBatch(null);
-
-    const source = new EventSource(simulateStreamUrl(n, riskShift));
-    sourceRef.current = source;
-    let count = 0;
-
-    source.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.done) {
-        setLastBatch({ bandCounts: data.band_counts, total: count });
-        source.close();
-        sourceRef.current = null;
-        setLoading(false);
-        return;
-      }
-      addOrders([data as ScoredOrder]);
-      count += 1;
-      setReceived(count);
-    };
-
-    source.onerror = () => {
-      source.close();
-      sourceRef.current = null;
-      setLoading(false);
-      setError("Streaming connection to the API failed.");
-    };
+    setCountText(String(n));
+    startSimulation(n, riskShift);
   }
 
   return (
@@ -80,9 +59,10 @@ export default function SimulatePage() {
             <input
               type="number"
               min={1}
-              max={500}
-              value={n}
-              onChange={(e) => setN(Math.max(1, Math.min(500, Number(e.target.value))))}
+              max={MAX_ORDERS}
+              value={countText}
+              onChange={(e) => setCountText(e.target.value)}
+              onBlur={() => setCountText(String(n))}
               className="mt-2 w-full rounded-md border px-3 py-2 text-sm tabular"
               style={{ borderColor: "var(--border)", background: "var(--surface)" }}
             />
@@ -103,7 +83,7 @@ export default function SimulatePage() {
               step={0.05}
               value={riskShift}
               onChange={(e) => setRiskShift(Number(e.target.value))}
-              className="mt-2 w-full accent-[--series-1]"
+              className="mt-2 w-full accent-(--series-1)"
             />
             <div className="mt-1 flex justify-between text-xs" style={{ color: "var(--text-muted)" }}>
               <span>Population baseline</span>
@@ -114,25 +94,37 @@ export default function SimulatePage() {
 
         <button
           onClick={handleGenerate}
-          disabled={loading}
+          disabled={running}
           className="mt-6 rounded-md px-4 py-2 text-sm font-semibold text-white transition-opacity disabled:opacity-60"
           style={{ background: "var(--series-1)" }}
         >
-          {loading ? `Generating… (${received}/${n})` : `Generate ${n} orders`}
+          {running && simulation
+            ? `Generating… (${simulation.received}/${simulation.requested})`
+            : `Generate ${n} orders`}
         </button>
 
-        {error && (
+        {running && (
+          <p className="mt-3 text-sm" style={{ color: "var(--text-secondary)" }}>
+            Scoring live &mdash; switch to the{" "}
+            <Link href="/dashboard" className="font-medium underline" style={{ color: "var(--series-1)" }}>
+              Risk Analyst Dashboard
+            </Link>{" "}
+            to watch the orders arrive; the batch keeps streaming.
+          </p>
+        )}
+
+        {simulation?.error && (
           <p className="mt-3 text-sm" style={{ color: "var(--status-critical)" }}>
-            {error}
+            {simulation.error}
           </p>
         )}
       </section>
 
-      {lastBatch && (
+      {lastCounts && lastTotal > 0 && (
         <section className="panel p-6">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-base font-semibold" style={{ color: "var(--text-primary)" }}>
-              Last batch &middot; {lastBatch.total} orders
+              Last batch &middot; {lastTotal} orders
             </h2>
             <Link href="/dashboard" className="text-sm font-medium underline" style={{ color: "var(--series-1)" }}>
               View in Risk Analyst Dashboard &rarr;
@@ -141,7 +133,7 @@ export default function SimulatePage() {
 
           <div className="mt-4 flex h-3 w-full overflow-hidden rounded-full">
             {(["low", "medium", "high"] as RiskBand[]).map((band) => {
-              const width = (lastBatch.bandCounts[band] / lastBatch.total) * 100;
+              const width = (lastCounts[band] / lastTotal) * 100;
               return width > 0 ? (
                 <div key={band} style={{ width: `${width}%`, background: BAND_COLOR[band] }} />
               ) : null;
@@ -152,10 +144,10 @@ export default function SimulatePage() {
             {(["low", "medium", "high"] as RiskBand[]).map((band) => (
               <div key={band} className="text-center">
                 <div className="tabular text-xl font-semibold" style={{ color: BAND_COLOR[band] }}>
-                  {lastBatch.bandCounts[band]}
+                  {lastCounts[band]}
                 </div>
                 <div className="text-xs capitalize" style={{ color: "var(--text-muted)" }}>
-                  {band} risk &middot; {((lastBatch.bandCounts[band] / lastBatch.total) * 100).toFixed(0)}%
+                  {band} risk &middot; {((lastCounts[band] / lastTotal) * 100).toFixed(0)}%
                 </div>
               </div>
             ))}

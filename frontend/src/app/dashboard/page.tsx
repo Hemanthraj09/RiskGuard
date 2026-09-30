@@ -139,6 +139,8 @@ function ManualScoreForm({ onScored }: { onScored: (order: ScoredOrder) => void 
 }
 
 function DecisionButtons({ order, onDecided }: { order: ScoredOrder; onDecided: () => void }) {
+  const { isAwaitingSave } = useOrders();
+  const awaitingSave = isAwaitingSave(order.order_id);
   const [recorded, setRecorded] = useState<{ decision: AnalystDecision; decided_at: string } | null>(null);
   const [pending, setPending] = useState<AnalystDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -167,7 +169,7 @@ function DecisionButtons({ order, onDecided }: { order: ScoredOrder; onDecided: 
       <div className="grid grid-cols-2 gap-2">
         <button
           onClick={() => handleDecide("confirmed_normal")}
-          disabled={pending !== null}
+          disabled={pending !== null || awaitingSave}
           className="rounded-md px-3 py-1.5 text-xs font-semibold disabled:opacity-60"
           style={{ background: "var(--status-good-bg)", color: "var(--status-good)" }}
         >
@@ -175,13 +177,19 @@ function DecisionButtons({ order, onDecided }: { order: ScoredOrder; onDecided: 
         </button>
         <button
           onClick={() => handleDecide("flagged_for_verification")}
-          disabled={pending !== null}
+          disabled={pending !== null || awaitingSave}
           className="rounded-md px-3 py-1.5 text-xs font-semibold disabled:opacity-60"
           style={{ background: "var(--status-critical-bg)", color: "var(--status-critical)" }}
         >
           {pending === "flagged_for_verification" ? "Recording…" : "Flag for verification"}
         </button>
       </div>
+      {awaitingSave && (
+        <p className="mt-1.5 text-xs" style={{ color: "var(--text-muted)" }}>
+          This order&apos;s simulated batch is still streaming &mdash; decisions unlock once the whole
+          batch has been scored and saved.
+        </p>
+      )}
       {recorded && (
         <p className="mt-1.5 text-xs" style={{ color: "var(--text-muted)" }}>
           Decision recorded: <strong style={{ color: "var(--text-secondary)" }}>{recorded.decision.replace(/_/g, " ")}</strong>{" "}
