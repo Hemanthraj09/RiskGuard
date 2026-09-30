@@ -11,6 +11,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { TOOLTIP_STYLE } from "./chartTheme";
 
 export function CostCurveChart({
   data,
@@ -23,7 +24,8 @@ export function CostCurveChart({
 }) {
   return (
     <ResponsiveContainer width="100%" height={280}>
-      <LineChart data={data} margin={{ top: 8, right: 24, bottom: 4, left: 8 }}>
+      {/* Top margin leaves room for the "Optimal" reference-line label above the plot. */}
+      <LineChart data={data} margin={{ top: 24, right: 24, bottom: 4, left: 8 }}>
         <CartesianGrid stroke="var(--gridline)" vertical={false} />
         <XAxis
           type="number"
@@ -42,7 +44,7 @@ export function CostCurveChart({
         <Tooltip
           formatter={(value) => [`Rs.${Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 })}`, "Total cost"]}
           labelFormatter={(v) => `Threshold ${Number(v).toFixed(3)}`}
-          contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid var(--border)" }}
+          {...TOOLTIP_STYLE}
         />
         <ReferenceLine
           x={optimalThreshold}

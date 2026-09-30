@@ -23,6 +23,7 @@ function SegmentTable({ title, data }: { title: string; data: Record<string, Seg
             <tr className="border-b text-left text-xs" style={{ borderColor: "var(--border)", color: "var(--text-muted)" }}>
               <th className="py-2 pr-4 font-medium">Segment</th>
               <th className="py-2 pr-4 font-medium">n</th>
+              <th className="py-2 pr-4 font-medium">Flagged</th>
               <th className="py-2 pr-4 font-medium">AUC</th>
               <th className="py-2 pr-4 font-medium">Precision</th>
               <th className="py-2 pr-4 font-medium">Recall</th>
@@ -43,13 +44,17 @@ function SegmentTable({ title, data }: { title: string; data: Record<string, Seg
                   )}
                 </td>
                 <td className="tabular py-2 pr-4" style={{ color: "var(--text-secondary)" }}>{m.n.toLocaleString()}</td>
+                <td className="tabular py-2 pr-4" style={{ color: "var(--text-secondary)" }}>{m.n_flagged.toLocaleString()}</td>
                 <td
                   className="tabular py-2 pr-4"
                   style={{ color: m.auc !== null && m.auc < 0.55 ? "var(--status-critical)" : "var(--text-primary)" }}
                 >
                   {m.auc !== null ? m.auc.toFixed(3) : "n/a"}
                 </td>
-                <td className="tabular py-2 pr-4" style={{ color: "var(--text-secondary)" }}>{dec(m.precision)}</td>
+                {/* With no flags, precision is undefined -- not zero. */}
+                <td className="tabular py-2 pr-4" style={{ color: "var(--text-secondary)" }}>
+                  {m.n_flagged > 0 ? dec(m.precision) : "—"}
+                </td>
                 <td className="tabular py-2 pr-4" style={{ color: "var(--text-secondary)" }}>{dec(m.recall)}</td>
               </tr>
             ))}
@@ -65,11 +70,14 @@ export function SegmentBreakdown({
 }: {
   segments: Record<string, Record<string, SegmentMetric>>;
 }) {
-  const weakSegments = Object.entries(segments).flatMap(([group, data]) =>
-    Object.entries(data)
-      .filter(([, m]) => m.auc !== null && m.auc < 0.55)
-      .map(([seg]) => `${seg.replace(/_/g, " ")} (${SECTION_LABELS[group]?.toLowerCase() ?? group})`)
-  );
+  const segmentsWhere = (predicate: (m: SegmentMetric) => boolean) =>
+    Object.entries(segments).flatMap(([group, data]) =>
+      Object.entries(data)
+        .filter(([, m]) => predicate(m))
+        .map(([seg]) => `${seg.replace(/_/g, " ")} (${SECTION_LABELS[group]?.toLowerCase() ?? group})`)
+    );
+  const weakSegments = segmentsWhere((m) => m.auc !== null && m.auc < 0.55);
+  const neverFlagged = segmentsWhere((m) => m.n > 0 && m.n_flagged === 0);
 
   return (
     <section className="panel p-6">
@@ -88,9 +96,18 @@ export function SegmentBreakdown({
       {weakSegments.length > 0 && (
         <p className="mt-4 rounded-md p-3 text-xs" style={{ background: "var(--status-warning-bg)", color: "var(--status-warning)" }}>
           <strong>Known limitation:</strong> the model performs near or below random within{" "}
-          {weakSegments.join(", ")} &mdash; these categories have low overall return rates and the
+          {weakSegments.join(", ")} &mdash; these segments have low overall return rates and the
           model rarely has enough signal there to discriminate. Treat flags in these segments with
           lower confidence than the global metrics suggest.
+        </p>
+      )}
+      {neverFlagged.length > 0 && (
+        <p className="mt-4 rounded-md p-3 text-xs" style={{ background: "var(--surface)", color: "var(--text-secondary)" }}>
+          <strong style={{ color: "var(--text-primary)" }}>Never flagged at this threshold:</strong>{" "}
+          {neverFlagged.join(", ")}. Their return rates are low enough that no order clears the
+          cost-optimal threshold, so precision there is undefined (&mdash;) rather than zero; returns
+          in these segments are accepted as the cheaper risk. The model still ranks within them
+          (see AUC), which matters if the threshold or costs change.
         </p>
       )}
     </section>

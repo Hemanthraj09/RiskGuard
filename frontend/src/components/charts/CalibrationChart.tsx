@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { TOOLTIP_STYLE } from "./chartTheme";
 
 export function CalibrationChart({
   predicted,
@@ -45,7 +46,7 @@ export function CalibrationChart({
         />
         <Tooltip
           formatter={(value) => Number(value).toFixed(3)}
-          contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid var(--border)" }}
+          {...TOOLTIP_STYLE}
         />
         <Legend wrapperStyle={{ fontSize: 12 }} />
         <Line
@@ -61,7 +62,7 @@ export function CalibrationChart({
         <Line
           data={data}
           dataKey="actual"
-          name="Model (by decile bucket)"
+          name="Model (10 equal-width bins)"
           stroke="var(--series-1)"
           strokeWidth={2}
           dot={{ r: 4, fill: "var(--series-1)", strokeWidth: 0 }}

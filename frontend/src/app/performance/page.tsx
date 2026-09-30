@@ -26,7 +26,7 @@ const rupees = (v: number) =>
 const ciLabel = (point: number, ci: [number, number], fmt: (v: number) => string) =>
   `${fmt(point)} [${fmt(ci[0])}–${fmt(ci[1])}]`;
 
-function costOf(e: CostCurvePoint, friction: number, ret: number, review: number) {
+function costOf(e: Pick<CostCurvePoint, "fp" | "fn" | "tp">, friction: number, ret: number, review: number) {
   return e.fp * friction + e.fn * ret + (e.fp + e.tp) * review;
 }
 
@@ -69,7 +69,12 @@ export default function PerformancePage() {
     const testCost = costOf(testEntry, frictionCost, returnCost, reviewCost);
     const f1 = (2 * testEntry.precision * testEntry.recall) / (testEntry.precision + testEntry.recall || 1);
 
-    return { validationCurve, selected, testEntry, testCost, f1 };
+    // The heuristic is a fixed rule, so its confusion matrix never changes --
+    // but its cost does, with the same sliders as the model's.
+    const [[, hFp], [hFn, hTp]] = metrics.baselines.heuristic.confusion_matrix;
+    const heuristicCost = costOf({ fp: hFp, fn: hFn, tp: hTp }, frictionCost, returnCost, reviewCost);
+
+    return { validationCurve, selected, testEntry, testCost, f1, heuristicCost };
   }, [metrics, frictionCost, returnCost, reviewCost]);
 
   if (error) {
@@ -85,7 +90,7 @@ export default function PerformancePage() {
     return <PerformanceSkeleton />;
   }
 
-  const { selected, testEntry, testCost, f1 } = derived;
+  const { selected, testEntry, testCost, f1, heuristicCost } = derived;
   const isDefaultCosts =
     frictionCost === metrics.threshold_selection.friction_cost &&
     returnCost === metrics.threshold_selection.return_cost &&
@@ -95,6 +100,10 @@ export default function PerformancePage() {
     [testEntry.fn, testEntry.tp],
   ];
   const tm = metrics.test_metrics;
+  const heuristic = metrics.baselines.heuristic;
+  const lrAuc = metrics.baselines.logistic_regression.test_auc;
+  const heuristicCostGap = (heuristicCost - testCost) / testCost;
+  const signalCaptured = `${(metrics.ceiling_signal_captured * 100).toFixed(0)}%`;
 
   return (
     <div className="flex flex-col gap-8">
@@ -105,8 +114,8 @@ export default function PerformancePage() {
         <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
           Held-out test set &middot; {metrics.test_set_size.toLocaleString()} orders &middot;{" "}
           {pct(metrics.positive_rate)} actually returned. Validation set (
-          {metrics.validation_set_size.toLocaleString()} orders) is used only to select the
-          decision threshold below &mdash; never to evaluate it.
+          {metrics.validation_set_size.toLocaleString()} orders) is used only to fit the probability
+          calibration and select the decision threshold below &mdash; never to evaluate either.
         </p>
       </div>
 
@@ -115,17 +124,15 @@ export default function PerformancePage() {
           <StatTile label="ROC-AUC" value={metrics.roc_auc.toFixed(3)} />
           <StatTile label="PR-AUC" value={metrics.pr_auc.toFixed(3)} sublabel="Avg. precision" />
           <StatTile label="Ceiling AUC" value={metrics.bayes_optimal_ceiling_auc.toFixed(3)} sublabel="Bayes-optimal" />
-          <StatTile
-            label="Ceiling captured"
-            value={`${((metrics.roc_auc / metrics.bayes_optimal_ceiling_auc) * 100).toFixed(0)}%`}
-          />
+          <StatTile label="Signal captured" value={signalCaptured} sublabel="Of achievable lift" />
           <StatTile label="Brier score" value={metrics.brier_score.toFixed(3)} sublabel="Lower is better" />
           <StatTile label="ECE" value={metrics.ece.toFixed(3)} sublabel="Calibration error" />
-          <StatTile label="Threshold" value={metrics.threshold_selection.optimal_threshold.toFixed(3)} sublabel="Cost-optimal" />
+          <StatTile label="Threshold" value={metrics.threshold_selection.optimal_threshold.toFixed(3)} sublabel="Cost-optimal, default costs" />
         </div>
         <p className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
-          AUC captures {((metrics.roc_auc / metrics.bayes_optimal_ceiling_auc) * 100).toFixed(0)}% of the
-          theoretically achievable ceiling.
+          The model captures {signalCaptured} of the ranking signal any model could extract from this
+          data: (AUC &minus; 0.5) / (ceiling &minus; 0.5), measured from 0.5 because a coin flip
+          already scores 0.5.
         </p>
       </div>
 
@@ -163,22 +170,37 @@ export default function PerformancePage() {
           value={metrics.roc_auc.toFixed(3)}
           sublabel={`95% CI ${tm.roc_auc_ci[0].toFixed(3)}–${tm.roc_auc_ci[1].toFixed(3)} · ceiling ${metrics.bayes_optimal_ceiling_auc.toFixed(3)}`}
         />
+        {/* The bootstrap CIs were computed at the default-cost threshold; next
+            to a point estimate for any other threshold they'd be describing a
+            different operating point, so they're only shown at default costs. */}
         <StatTile
           label="Precision"
-          value={ciLabel(testEntry.precision, tm.precision_ci, dec)}
+          value={isDefaultCosts ? ciLabel(testEntry.precision, tm.precision_ci, dec) : dec(testEntry.precision)}
           sublabel="Cost-optimized, not maximized"
         />
         <StatTile
           label="Recall"
-          value={ciLabel(testEntry.recall, tm.recall_ci, dec)}
+          value={isDefaultCosts ? ciLabel(testEntry.recall, tm.recall_ci, dec) : dec(testEntry.recall)}
           sublabel="Cost-optimized, not maximized"
         />
         <StatTile
           label="F1"
-          value={ciLabel(f1, tm.f1_ci, dec)}
-          sublabel={`95% CI, n=${tm.n_bootstrap} bootstrap`}
+          value={isDefaultCosts ? ciLabel(f1, tm.f1_ci, dec) : dec(f1)}
+          sublabel={
+            isDefaultCosts
+              ? `95% CI, n=${tm.n_bootstrap} bootstrap`
+              : `CIs shown at default costs (threshold ${tm.threshold.toFixed(3)})`
+          }
         />
       </div>
+      <p className="-mt-5 text-xs" style={{ color: "var(--text-muted)" }}>
+        Ceiling check at the default-cost threshold: flagging the same{" "}
+        {metrics.bayes_optimal_at_threshold.n_flagged.toLocaleString()} test orders by the label
+        generator&apos;s <em>true</em> return probability &mdash; the best any model can expect &mdash;
+        gives precision {dec(metrics.bayes_optimal_at_threshold.precision)} and recall{" "}
+        {dec(metrics.bayes_optimal_at_threshold.recall)} (model: {dec(tm.precision)} /{" "}
+        {dec(tm.recall)}). Both are capped by the data&apos;s own noise, not by the model.
+      </p>
 
       <section className="panel p-6">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -222,7 +244,7 @@ export default function PerformancePage() {
             <input
               type="range" min={20} max={1000} step={10} value={frictionCost}
               onChange={(e) => setFrictionCost(Number(e.target.value))}
-              className="mt-2 w-full accent-[--series-1]"
+              className="mt-2 w-full accent-(--series-1)"
             />
           </div>
           <div>
@@ -240,7 +262,7 @@ export default function PerformancePage() {
             <input
               type="range" min={50} max={2000} step={10} value={returnCost}
               onChange={(e) => setReturnCost(Number(e.target.value))}
-              className="mt-2 w-full accent-[--series-1]"
+              className="mt-2 w-full accent-(--series-1)"
             />
           </div>
           <div>
@@ -258,7 +280,7 @@ export default function PerformancePage() {
             <input
               type="range" min={0} max={300} step={5} value={reviewCost}
               onChange={(e) => setReviewCost(Number(e.target.value))}
-              className="mt-2 w-full accent-[--series-1]"
+              className="mt-2 w-full accent-(--series-1)"
             />
           </div>
         </div>
@@ -303,6 +325,7 @@ export default function PerformancePage() {
         </h2>
         <p className="mt-1 text-sm" style={{ color: "var(--text-secondary)" }}>
           A ranked score needs to be judged against something simpler, not just against itself.
+          Costs use the sliders above.
         </p>
         <div className="mt-4 overflow-x-auto">
           <table className="w-full text-sm">
@@ -319,12 +342,12 @@ export default function PerformancePage() {
               <tr className="border-b" style={{ borderColor: "var(--gridline)" }}>
                 <td className="py-2 pr-4" style={{ color: "var(--text-primary)" }}>
                   Heuristic rule
-                  <div className="text-xs" style={{ color: "var(--text-muted)" }}>{metrics.baselines.heuristic.rule}</div>
+                  <div className="text-xs" style={{ color: "var(--text-muted)" }}>{heuristic.rule}</div>
                 </td>
                 <td className="py-2 pr-4" style={{ color: "var(--text-muted)" }}>&mdash;</td>
-                <td className="tabular py-2 pr-4">{dec(metrics.baselines.heuristic.precision)}</td>
-                <td className="tabular py-2 pr-4">{dec(metrics.baselines.heuristic.recall)}</td>
-                <td className="tabular py-2 pr-4 text-right">{rupees(metrics.baselines.heuristic.total_cost)}</td>
+                <td className="tabular py-2 pr-4">{dec(heuristic.precision)}</td>
+                <td className="tabular py-2 pr-4">{dec(heuristic.recall)}</td>
+                <td className="tabular py-2 pr-4 text-right">{rupees(heuristicCost)}</td>
               </tr>
               <tr className="border-b" style={{ borderColor: "var(--gridline)" }}>
                 <td className="py-2 pr-4" style={{ color: "var(--text-primary)" }}>
@@ -347,19 +370,26 @@ export default function PerformancePage() {
                 <td className="tabular py-2 pr-4 font-semibold" style={{ color: "var(--series-1)" }}>{dec(testEntry.precision)}</td>
                 <td className="tabular py-2 pr-4 font-semibold" style={{ color: "var(--series-1)" }}>{dec(testEntry.recall)}</td>
                 <td className="tabular py-2 pr-4 text-right font-semibold" style={{ color: "var(--series-1)" }}>
-                  {rupees(metrics.baselines.lightgbm_test_cost_at_frozen_threshold)}
+                  {rupees(testCost)}
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
         <p className="mt-3 text-xs" style={{ color: "var(--text-muted)" }}>
-          The heuristic has higher precision but much lower recall &mdash; given return cost far
-          exceeds friction cost, that trade-off costs{" "}
-          {pct((metrics.baselines.heuristic.total_cost - metrics.baselines.lightgbm_test_cost_at_frozen_threshold) / metrics.baselines.heuristic.total_cost)}{" "}
-          more overall. Logistic regression on identical features scores statistically the same
-          AUC as LightGBM &mdash; evidence the achievable signal here is close to linear, and that
-          the model wasn&apos;t over-fit to appear more sophisticated than the data supports.
+          The heuristic flags a fixed {pct(heuristic.flag_rate)} of orders, with{" "}
+          {heuristic.precision >= testEntry.precision ? "higher" : "lower"} precision (
+          {dec(heuristic.precision)} vs. {dec(testEntry.precision)}) and{" "}
+          {heuristic.recall >= testEntry.recall ? "higher" : "lower"} recall ({dec(heuristic.recall)} vs.{" "}
+          {dec(testEntry.recall)}) than the model at the selected threshold. At these costs it{" "}
+          {heuristicCostGap >= 0
+            ? `costs ${pct(heuristicCostGap)} more than the model on test.`
+            : `costs ${pct(-heuristicCostGap)} less than the model on test.`}{" "}
+          Logistic regression on identical features scores {lrAuc.toFixed(3)} AUC vs. LightGBM&apos;s{" "}
+          {metrics.roc_auc.toFixed(3)}
+          {lrAuc >= tm.roc_auc_ci[0]
+            ? " — inside LightGBM's own 95% CI: the achievable signal here is close to linear, and the model wasn't over-fit to look more sophisticated than the data supports."
+            : " — below LightGBM's 95% CI: the non-linear value effect and interactions carry signal a linear model misses."}
         </p>
       </section>
 

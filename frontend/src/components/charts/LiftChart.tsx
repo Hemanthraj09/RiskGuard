@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { TOOLTIP_STYLE } from "./chartTheme";
 
 export function LiftChart({
   decilePct,
@@ -20,11 +21,15 @@ export function LiftChart({
   captureRate: number[];
   randomBaseline: number[];
 }) {
-  const data = decilePct.map((d, i) => ({
-    decile: d,
-    capture: captureRate[i],
-    baseline: randomBaseline[i],
-  }));
+  // Anchored at the origin: reviewing 0% of orders catches 0% of returns.
+  const data = [
+    { decile: 0, capture: 0, baseline: 0 },
+    ...decilePct.map((d, i) => ({
+      decile: d,
+      capture: captureRate[i],
+      baseline: randomBaseline[i],
+    })),
+  ];
 
   return (
     <ResponsiveContainer width="100%" height={260}>
@@ -50,7 +55,7 @@ export function LiftChart({
         <Tooltip
           formatter={(value) => `${(Number(value) * 100).toFixed(1)}%`}
           labelFormatter={(v) => `Top ${v}% by risk`}
-          contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid var(--border)" }}
+          {...TOOLTIP_STYLE}
         />
         <Legend wrapperStyle={{ fontSize: 12 }} />
         <Line

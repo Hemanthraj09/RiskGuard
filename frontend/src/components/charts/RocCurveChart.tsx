@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { TOOLTIP_STYLE } from "./chartTheme";
 
 export function RocCurveChart({
   fpr,
@@ -48,7 +49,7 @@ export function RocCurveChart({
           />
           <Tooltip
             formatter={(value) => Number(value).toFixed(3)}
-            contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid var(--border)" }}
+            {...TOOLTIP_STYLE}
           />
           <Legend wrapperStyle={{ fontSize: 12 }} />
           <Line
