@@ -6,6 +6,7 @@
   "roc_auc": 0.7058,
   "pr_auc": 0.465,
   "bayes_optimal_ceiling_auc": 0.7147,
+  "ceiling_signal_captured": 0.9587,
   "calibration_sanity_check": {
     "mean_raw_probability": 0.4428,
     "mean_calibrated_probability": 0.2069,
@@ -163,6 +164,7 @@
         "n": 393,
         "insufficient_sample": false,
         "positive_rate": 0.3537,
+        "n_flagged": 263,
         "auc": 0.6754,
         "precision": 0.4221,
         "recall": 0.7986
@@ -171,6 +173,7 @@
         "n": 388,
         "insufficient_sample": false,
         "positive_rate": 0.2113,
+        "n_flagged": 9,
         "auc": 0.6113,
         "precision": 0.4444,
         "recall": 0.0488
@@ -179,6 +182,7 @@
         "n": 416,
         "insufficient_sample": false,
         "positive_rate": 0.1082,
+        "n_flagged": 0,
         "auc": 0.5169,
         "precision": 0.0,
         "recall": 0.0
@@ -187,6 +191,7 @@
         "n": 422,
         "insufficient_sample": false,
         "positive_rate": 0.391,
+        "n_flagged": 297,
         "auc": 0.7146,
         "precision": 0.4714,
         "recall": 0.8485
@@ -195,6 +200,7 @@
         "n": 383,
         "insufficient_sample": false,
         "positive_rate": 0.1201,
+        "n_flagged": 0,
         "auc": 0.5028,
         "precision": 0.0,
         "recall": 0.0
@@ -203,6 +209,7 @@
         "n": 435,
         "insufficient_sample": false,
         "positive_rate": 0.1563,
+        "n_flagged": 1,
         "auc": 0.588,
         "precision": 1.0,
         "recall": 0.0147
@@ -213,6 +220,7 @@
         "n": 749,
         "insufficient_sample": false,
         "positive_rate": 0.3017,
+        "n_flagged": 242,
         "auc": 0.7475,
         "precision": 0.5579,
         "recall": 0.5973
@@ -221,6 +229,7 @@
         "n": 832,
         "insufficient_sample": false,
         "positive_rate": 0.1767,
+        "n_flagged": 163,
         "auc": 0.6529,
         "precision": 0.3313,
         "recall": 0.3673
@@ -229,6 +238,7 @@
         "n": 610,
         "insufficient_sample": false,
         "positive_rate": 0.2098,
+        "n_flagged": 121,
         "auc": 0.701,
         "precision": 0.4298,
         "recall": 0.4062
@@ -237,6 +247,7 @@
         "n": 246,
         "insufficient_sample": false,
         "positive_rate": 0.1789,
+        "n_flagged": 44,
         "auc": 0.6167,
         "precision": 0.3409,
         "recall": 0.3409
@@ -247,6 +258,7 @@
         "n": 114,
         "insufficient_sample": false,
         "positive_rate": 0.2281,
+        "n_flagged": 33,
         "auc": 0.8079,
         "precision": 0.5152,
         "recall": 0.6538
@@ -255,6 +267,7 @@
         "n": 2323,
         "insufficient_sample": false,
         "positive_rate": 0.2234,
+        "n_flagged": 537,
         "auc": 0.701,
         "precision": 0.4451,
         "recall": 0.4605
@@ -3918,6 +3931,11 @@
     ],
     "n_bootstrap": 1000
   },
+  "bayes_optimal_at_threshold": {
+    "n_flagged": 570,
+    "precision": 0.4561,
+    "recall": 0.4771
+  },
   "calibration_curve": {
     "predicted_probability": [
       0.0773,
@@ -4046,7 +4064,8 @@
       0.9619,
       0.9667,
       0.9778,
-      0.9794
+      0.9794,
+      1.0
     ],
     "tpr": [
       0.0,
@@ -4148,7 +4167,8 @@
       0.978,
       0.9835,
       0.989,
-      0.9908
+      0.9908,
+      1.0
     ]
   },
   "pr_curve": {
@@ -4254,7 +4274,8 @@
       0.8571,
       0.9286,
       0.8889,
-      0.75
+      0.75,
+      1.0
     ],
     "recall": [
       1.0,
@@ -4358,7 +4379,8 @@
       0.033,
       0.0239,
       0.0147,
-      0.0055
+      0.0055,
+      0.0
     ]
   },
   "lift_curve": {
@@ -4401,18 +4423,40 @@
   },
   "shifted_calibration_probes": [
     {
+      "risk_shift": 0.0,
+      "n_orders": 1500,
+      "n_probes": 5,
+      "ece_median": 0.0212,
+      "ece_range": [
+        0.0206,
+        0.0341
+      ],
+      "auc_median": 0.7222,
+      "positive_rate_median": 0.2333
+    },
+    {
       "risk_shift": 0.7,
       "n_orders": 1500,
-      "positive_rate": 0.4107,
-      "ece": 0.047,
-      "auc": 0.8026
+      "n_probes": 5,
+      "ece_median": 0.035,
+      "ece_range": [
+        0.0292,
+        0.047
+      ],
+      "auc_median": 0.7937,
+      "positive_rate_median": 0.3967
     },
     {
       "risk_shift": 1.0,
       "n_orders": 1500,
-      "positive_rate": 0.476,
-      "ece": 0.0509,
-      "auc": 0.8308
+      "n_probes": 5,
+      "ece_median": 0.0509,
+      "ece_range": [
+        0.0383,
+        0.0603
+      ],
+      "auc_median": 0.8028,
+      "positive_rate_median": 0.476
     }
   ],
   "failure_case": {

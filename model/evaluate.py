@@ -172,6 +172,16 @@ def compute_ece(y_true, y_prob, n_bins=10):
     return round(ece, 4), per_bin
 
 
+def downsample_curve(xs, ys, max_points=100):
+    """Every k-th point of a curve for plotting, always keeping the last one
+    -- a plain [::k] slice silently drops the endpoint (ROC's (1, 1))."""
+    step = max(1, len(xs) // max_points)
+    idx = list(range(0, len(xs), step))
+    if idx[-1] != len(xs) - 1:
+        idx.append(len(xs) - 1)
+    return [round(float(xs[i]), 4) for i in idx], [round(float(ys[i]), 4) for i in idx]
+
+
 def compute_lift_curve(y_true, y_prob, n_deciles=10):
     """Sort by predicted risk descending; at each decile of orders reviewed,
     what fraction of ALL actual returns in the test set have been caught."""
@@ -284,6 +294,8 @@ def compute_segment_metrics(y_true, y_prob, threshold, segment_series, min_sampl
             "n": n,
             "insufficient_sample": n < min_sample,
             "positive_rate": round(float(yt.mean()), 4),
+            # With zero flags, precision/recall read 0.0 -- not "every flag was wrong".
+            "n_flagged": int(y_pred.sum()),
             "auc": auc,
             "precision": round(float(precision_score(yt, y_pred, zero_division=0)), 4),
             "recall": round(float(recall_score(yt, y_pred, zero_division=0)), 4),
@@ -360,7 +372,10 @@ def probe_shifted_calibration(model, calibrator, metadata, risk_shift, n_orders=
     holds up under the shifted population the live demo will actually show.
     Cold-start-only customers isolate exactly what risk_shift changes --
     order-level field distribution -- since risk_shift never touches
-    customer history in api/simulate_gen.py.
+    customer history in api/simulate_gen.py. That also means the test set's
+    ECE is NOT the baseline to compare against (different population,
+    different sample size); a risk_shift=0.0 probe is -- see
+    summarize_shift_probes.
     """
     field_rng = np.random.RandomState(seed)
     label_rng = np.random.RandomState(seed + 1)
@@ -405,6 +420,49 @@ def probe_shifted_calibration(model, calibrator, metadata, risk_shift, n_orders=
         "positive_rate": round(float(y_shifted.mean()), 4),
         "ece": ece_shifted,
         "auc": auc_shifted,
+    }
+
+
+PROBE_SHIFTS = (0.0, 0.7, 1.0)  # 0.0 is the like-for-like baseline for the other two
+PROBE_SEEDS = (123, 456, 789, 1011, 1213)
+PROBE_N_ORDERS = 1500
+
+
+def summarize_shift_probes(model, calibrator, metadata, risk_shift):
+    """Median over several independent probes at one risk_shift: a single
+    1,500-order probe's ECE swings by roughly +/-0.01 from seed to seed --
+    about the size of the effect being measured -- so one draw can't tell
+    a real calibration shift from sampling noise."""
+    runs = [
+        probe_shifted_calibration(model, calibrator, metadata, risk_shift, n_orders=PROBE_N_ORDERS, seed=seed)
+        for seed in PROBE_SEEDS
+    ]
+    eces = [r["ece"] for r in runs]
+    return {
+        "risk_shift": risk_shift,
+        "n_orders": PROBE_N_ORDERS,
+        "n_probes": len(runs),
+        "ece_median": round(float(np.median(eces)), 4),
+        "ece_range": [min(eces), max(eces)],
+        "auc_median": round(float(np.median([r["auc"] for r in runs])), 4),
+        "positive_rate_median": round(float(np.median([r["positive_rate"] for r in runs])), 4),
+    }
+
+
+def bayes_optimal_at_flag_count(y_true, true_prob, n_flagged):
+    """The ceiling at the model's own operating point: flag the same number
+    of orders, ranked by the label generator's true return probability.
+    That catches the most returns any model can expect to with that many
+    flags, so it bounds the precision AND recall achievable at this flag
+    rate -- the right yardstick for "are these precision/recall numbers
+    low?", since both are capped by the data's noise, not just the model."""
+    flagged = np.argsort(-true_prob, kind="stable")[:n_flagged]
+    y_pred = np.zeros_like(y_true)
+    y_pred[flagged] = 1
+    return {
+        "n_flagged": int(n_flagged),
+        "precision": round(float(precision_score(y_true, y_pred, zero_division=0)), 4),
+        "recall": round(float(recall_score(y_true, y_pred, zero_division=0)), 4),
     }
 
 
@@ -465,10 +523,10 @@ def main():
     print("RiskGuard — Model Evaluation")
     print("=" * 60)
 
-    print("\n[1/9] Loading model, calibrator, metadata...")
+    print("\n[1/14] Loading model, calibrator, metadata...")
     model, calibrator, metadata = load_artifacts()
 
-    print("[2/9] Loading train + validation + test data...")
+    print("[2/14] Loading train + validation + test data...")
     X_train, y_train, df_train = prepare_split(TRAIN_PATH, metadata)
     X_val, y_val, df_val = prepare_split(VAL_PATH, metadata)
     X_test, y_test, df_test = prepare_split(TEST_PATH, metadata)
@@ -476,7 +534,7 @@ def main():
     print(f"      Validation: {len(X_val):,} samples, positive rate {y_val.mean() * 100:.2f}%")
     print(f"      Test:       {len(X_test):,} samples, positive rate {y_test.mean() * 100:.2f}%")
 
-    print("[3/9] Generating calibrated predictions...")
+    print("[3/14] Generating calibrated predictions...")
     val_prob = get_calibrated_probs(model, calibrator, X_val)
     test_prob = get_calibrated_probs(model, calibrator, X_test)
     roc_auc = roc_auc_score(y_test, test_prob)
@@ -498,6 +556,12 @@ def main():
     # against the sampled label is the AUC ceiling no classifier can beat. ──
     ceiling_auc = round(float(roc_auc_score(y_test, df_test["return_probability"])), 4)
     print(f"      Bayes-optimal ceiling AUC (test): {ceiling_auc:.4f}")
+    # Share of the achievable ranking signal the model captures. Measured
+    # from 0.5, not from 0: a coin flip already scores 0.5 AUC, so the raw
+    # ratio roc_auc / ceiling_auc would credit a random classifier with
+    # 0.5 / ceiling_auc of the ceiling -- well over half.
+    ceiling_signal_captured = round(float((roc_auc - 0.5) / (ceiling_auc - 0.5)), 4)
+    print(f"      Share of achievable signal captured: {ceiling_signal_captured:.1%}")
 
     # ── Calibration sanity check: is_unbalance=True during training skews
     # raw probabilities well above the true base rate. Confirm isotonic
@@ -517,7 +581,7 @@ def main():
           f"(gap {calibration_sanity_check['calibrated_gap']:.4f} from actual rate)")
 
     # ── Threshold selection on VALIDATION only (leakage-safe) ──
-    print("[4/9] Selecting cost-optimal threshold on VALIDATION set (test never touched)...")
+    print("[4/14] Selecting cost-optimal threshold on VALIDATION set (test never touched)...")
     validation_cost_curve = compute_cost_curve(y_val, val_prob)
     optimal_entry, optimal_val_cost = select_optimal_threshold(
         validation_cost_curve, DEFAULT_FRICTION_COST, DEFAULT_RETURN_COST, DEFAULT_REVIEW_COST
@@ -534,7 +598,7 @@ def main():
     test_cost_at_frozen = total_cost(test_entry_at_frozen, DEFAULT_FRICTION_COST, DEFAULT_RETURN_COST, DEFAULT_REVIEW_COST)
 
     # ── Standard metrics at default 0.5 (fixed a priori, no selection -> test is fine) ──
-    print("[5/9] Computing metrics at default threshold 0.5 (test)...")
+    print("[5/14] Computing metrics at default threshold 0.5 (test)...")
     y_pred_05 = (test_prob >= 0.5).astype(int)
     metrics_at_05 = {
         "threshold": 0.5,
@@ -545,16 +609,21 @@ def main():
     }
 
     # ── Final metrics at the FROZEN threshold, on TEST ──
-    print("[6/9] Computing final metrics at the frozen threshold (test)...")
+    print("[6/14] Computing final metrics at the frozen threshold (test)...")
     y_pred_frozen = (test_prob >= frozen_threshold).astype(int)
     precision_frozen = precision_score(y_test, y_pred_frozen, zero_division=0)
     recall_frozen = recall_score(y_test, y_pred_frozen, zero_division=0)
     f1_frozen = f1_score(y_test, y_pred_frozen, zero_division=0)
     cm_frozen = confusion_matrix(y_test, y_pred_frozen, labels=[0, 1])
     print(f"      Precision: {precision_frozen:.4f}  Recall: {recall_frozen:.4f}  F1: {f1_frozen:.4f}")
+    ceiling_at_threshold = bayes_optimal_at_flag_count(
+        y_test, df_test["return_probability"].values, int(y_pred_frozen.sum())
+    )
+    print(f"      Bayes-optimal flagging of the same {ceiling_at_threshold['n_flagged']} orders: "
+          f"precision {ceiling_at_threshold['precision']:.4f}  recall {ceiling_at_threshold['recall']:.4f}")
 
     # ── Threshold-independent diagnostics, all on TEST ──
-    print("[7/9] Computing calibration curve, Brier score, ECE, PR/ROC/lift curves...")
+    print("[7/14] Computing calibration curve, Brier score, ECE, PR/ROC/lift curves...")
     prob_true, prob_pred = calibration_curve(y_test, test_prob, n_bins=10, strategy="uniform")
     fpr, tpr, _ = roc_curve(y_test, test_prob)
     pr_precision, pr_recall, _ = precision_recall_curve(y_test, test_prob)
@@ -564,24 +633,24 @@ def main():
     print(f"      Brier score: {brier:.4f}   ECE: {ece:.4f}")
 
     # ── Bootstrap 95% CIs on test ──
-    print("[8/9] Bootstrapping 95% confidence intervals (test, n=1000)...")
+    print("[8/14] Bootstrapping 95% confidence intervals (test, n=1000)...")
     ci = bootstrap_ci(y_test, test_prob, frozen_threshold)
     print(f"      AUC 95% CI: {ci['roc_auc_ci']}")
 
     # ── Honest failure case, at the frozen threshold, on test ──
-    print("[9/9] Finding honest failure case...")
+    print("[9/14] Finding honest failure case...")
     failure_case = find_honest_failure(df_test, y_test, test_prob, frozen_threshold)
 
     # ── Baselines: a floor (heuristic rule + logistic regression) to go with
     # the ceiling above -- the pitch needs both ends, not just the model. ──
-    print("[10/13] Computing baselines (heuristic rule + logistic regression)...")
+    print("[10/14] Computing baselines (heuristic rule + logistic regression)...")
     heuristic = heuristic_baseline(df_test, DEFAULT_FRICTION_COST, DEFAULT_RETURN_COST, DEFAULT_REVIEW_COST)
     lr_baseline = logistic_regression_baseline(X_train, y_train, X_test, y_test)
     print(f"       Heuristic cost: Rs.{heuristic['total_cost']:,.0f}  (model: Rs.{test_cost_at_frozen:,.0f})")
     print(f"       Logistic regression test AUC: {lr_baseline['test_auc']:.4f}  (LightGBM: {roc_auc:.4f})")
 
     # ── Segment-level metrics on test, at the frozen threshold ──
-    print("[11/13] Computing segment-level metrics (category / payment mode / tenure)...")
+    print("[11/14] Computing segment-level metrics (category / payment mode / tenure)...")
     tenure_series = pd.Series(
         np.where(df_test["days_since_last_order"].values == -1, "new", "returning"), index=df_test.index
     )
@@ -592,7 +661,7 @@ def main():
     }
 
     # ── Headline Rs. number: model cost vs. the two boundary cases ──
-    print("[12/13] Computing headline savings vs. flag-nothing / flag-everything...")
+    print("[12/14] Computing headline savings vs. flag-nothing / flag-everything...")
     headline_savings = compute_headline_savings(
         y_test, cm_frozen.tolist(), DEFAULT_FRICTION_COST, DEFAULT_RETURN_COST, DEFAULT_REVIEW_COST
     )
@@ -600,7 +669,7 @@ def main():
     print(f"       Savings vs flag-everything: Rs.{headline_savings['savings_vs_flag_everything_per_1000']:,.0f} per 1,000 orders")
 
     # ── Threshold stability across validation resamples ──
-    print("[13/13] Bootstrapping threshold stability on validation (n=1000)...")
+    print("[13/14] Bootstrapping threshold stability on validation (n=1000)...")
     threshold_stability = bootstrap_threshold_stability(
         y_val, val_prob, DEFAULT_FRICTION_COST, DEFAULT_RETURN_COST, DEFAULT_REVIEW_COST
     )
@@ -609,13 +678,12 @@ def main():
 
     # ── Probe: does calibration hold up under the Simulation Console's
     # risk-shift slider (a shifted population, not the standard test set)? ──
-    print("Probe: ECE under a risk-shifted synthetic batch (cold-start customers)...")
-    shifted_probes = [
-        probe_shifted_calibration(model, calibrator, metadata, risk_shift=0.7, n_orders=1500, seed=123),
-        probe_shifted_calibration(model, calibrator, metadata, risk_shift=1.0, n_orders=1500, seed=456),
-    ]
+    print(f"[14/14] Probe: ECE under risk-shifted synthetic batches "
+          f"(cold-start customers, {len(PROBE_SEEDS)} probes per shift)...")
+    shifted_probes = [summarize_shift_probes(model, calibrator, metadata, shift) for shift in PROBE_SHIFTS]
     for p in shifted_probes:
-        print(f"       shift={p['risk_shift']}: ECE={p['ece']:.4f}  AUC={p['auc']}  positive_rate={p['positive_rate']:.4f}")
+        print(f"       shift={p['risk_shift']}: median ECE={p['ece_median']:.4f} (range {p['ece_range']})  "
+              f"median AUC={p['auc_median']}  positive_rate={p['positive_rate_median']:.4f}")
 
     eval_results = {
         "test_set_size": int(len(y_test)),
@@ -626,6 +694,7 @@ def main():
         "roc_auc": round(float(roc_auc), 4),
         "pr_auc": round(float(pr_auc), 4),
         "bayes_optimal_ceiling_auc": ceiling_auc,
+        "ceiling_signal_captured": ceiling_signal_captured,
         "calibration_sanity_check": calibration_sanity_check,
         "brier_score": round(float(brier), 4),
         "ece": ece,
@@ -671,21 +740,17 @@ def main():
             **ci,
         },
 
+        "bayes_optimal_at_threshold": ceiling_at_threshold,
+
         "calibration_curve": {
             "predicted_probability": [round(float(p), 4) for p in prob_pred],
             "actual_return_rate": [round(float(p), 4) for p in prob_true],
             "n_bins": 10,
         },
 
-        "roc_curve": {
-            "fpr": [round(float(x), 4) for x in fpr[::max(1, len(fpr) // 100)]],
-            "tpr": [round(float(x), 4) for x in tpr[::max(1, len(tpr) // 100)]],
-        },
+        "roc_curve": dict(zip(("fpr", "tpr"), downsample_curve(fpr, tpr))),
 
-        "pr_curve": {
-            "precision": [round(float(x), 4) for x in pr_precision[::max(1, len(pr_precision) // 100)]],
-            "recall": [round(float(x), 4) for x in pr_recall[::max(1, len(pr_recall) // 100)]],
-        },
+        "pr_curve": dict(zip(("precision", "recall"), downsample_curve(pr_precision, pr_recall))),
 
         "lift_curve": lift,
 
@@ -701,7 +766,7 @@ def main():
     print(f"\n{'=' * 60}")
     print("EVALUATION SUMMARY")
     print(f"{'=' * 60}")
-    print(f"Bayes-optimal ceiling AUC: {ceiling_auc:.4f}")
+    print(f"Bayes-optimal ceiling AUC: {ceiling_auc:.4f}  (model captures {ceiling_signal_captured:.1%} of the achievable signal)")
     print(f"Mean calibrated probability vs actual rate: "
           f"{calibration_sanity_check['mean_calibrated_probability']:.4f} vs "
           f"{calibration_sanity_check['actual_positive_rate']:.4f} "
@@ -715,6 +780,8 @@ def main():
           f"(bootstrap median {threshold_stability['median_threshold']:.4f}, IQR {threshold_stability['iqr']})")
     print(f"Precision @ frozen (test): {precision_frozen:.4f}  95% CI {ci['precision_ci']}")
     print(f"Recall @ frozen (test):    {recall_frozen:.4f}  95% CI {ci['recall_ci']}")
+    print(f"  Bayes-optimal, same {ceiling_at_threshold['n_flagged']} flags: precision "
+          f"{ceiling_at_threshold['precision']:.4f}, recall {ceiling_at_threshold['recall']:.4f}")
     print(f"F1 @ frozen (test):        {f1_frozen:.4f}  95% CI {ci['f1_ci']}")
     print(f"Confusion matrix (test):   {cm_frozen.tolist()}")
     print(f"Model cost/1000:           Rs.{headline_savings['model_cost_per_1000']:,.0f}  "

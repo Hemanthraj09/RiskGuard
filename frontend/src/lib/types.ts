@@ -101,6 +101,7 @@ export interface SegmentMetric {
   n: number;
   insufficient_sample: boolean;
   positive_rate: number;
+  n_flagged: number; // at the frozen threshold; 0 means precision/recall are undefined, not zero
   auc: number | null;
   precision: number;
   recall: number;
@@ -114,6 +115,10 @@ export interface EvalResults {
   roc_auc: number;
   pr_auc: number;
   bayes_optimal_ceiling_auc: number;
+  // (roc_auc - 0.5) / (ceiling - 0.5): share of the achievable lift over a
+  // coin flip. The raw roc_auc / ceiling ratio would credit a random
+  // classifier (AUC 0.5) with well over half of the ceiling.
+  ceiling_signal_captured: number;
   brier_score: number;
   ece: number;
   ece_bins: {
@@ -157,13 +162,26 @@ export interface EvalResults {
     customer_tenure: Record<string, SegmentMetric>;
   };
 
+  // Medians over several independent cold-start probes per risk_shift;
+  // risk_shift 0 is the like-for-like baseline for the others.
   shifted_calibration_probes: {
     risk_shift: number;
     n_orders: number;
-    positive_rate: number;
-    ece: number;
-    auc: number | null;
+    n_probes: number;
+    ece_median: number;
+    ece_range: [number, number];
+    auc_median: number;
+    positive_rate_median: number;
   }[];
+
+  // Flagging the same number of test orders as the model at the frozen
+  // threshold, ranked by the generator's true return probability: the best
+  // precision/recall any model can expect at that flag rate.
+  bayes_optimal_at_threshold: {
+    n_flagged: number;
+    precision: number;
+    recall: number;
+  };
 
   threshold_selection: {
     method: string;
