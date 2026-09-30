@@ -10,9 +10,11 @@ before: validation.csv was never seeded, and live orders were scored
 against the wall clock (2026) while all history ends in mid-2024.
 """
 
+import json
 import os
 import shutil
 import sys
+import threading
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -214,3 +216,47 @@ def test_store_resyncs_when_the_dataset_changes(store, monkeypatch):
         conn.close()
     assert restored["returned"] == seeded["returned"]
     assert (live["returned"], live["predicted_probability"], live["order_timestamp"]) == (None, 0.42, live_ts)
+
+
+def test_stream_worker_commits_every_order_before_done(store):
+    """/simulate/stream's batch runs on its own thread (which owns its SQLite
+    connection) and commits whether or not anyone is still reading -- and
+    "done" is only emitted after that commit."""
+    emitted = []
+    worker = threading.Thread(target=main._run_simulation, args=(25, 0.5, emitted.append))
+    worker.start()
+    worker.join(timeout=120)
+    assert not worker.is_alive()
+    assert emitted[-1]["done"] is True
+    ids = [e["order_id"] for e in emitted[:-1]]
+    assert len(ids) == len(set(ids)) == 25
+
+    conn = db.get_connection()
+    try:
+        stored = {r["order_id"] for r in conn.execute(
+            "SELECT order_id FROM orders WHERE order_id IN (%s)" % ",".join("?" * len(ids)), ids)}
+    finally:
+        conn.close()
+    assert stored == set(ids)
+
+
+def test_sse_stream_orders_are_decidable_after_done(client):
+    with client.stream("GET", "/simulate/stream", params={"n": 12, "risk_shift": 0.3}) as resp:
+        events = [json.loads(line[len("data: "):]) for line in resp.iter_lines() if line.startswith("data: ")]
+    orders, done = events[:-1], events[-1]
+    assert done["done"] is True and sum(done["band_counts"].values()) == len(orders) == 12
+    for order in orders:
+        response = client.post("/decide", json={"order_id": order["order_id"], "decision": "confirmed_normal"})
+        assert response.status_code == 200
+
+
+def test_abandoned_batch_does_not_recycle_order_ids(store):
+    conn = db.get_connection()
+    try:
+        batch = main._simulate_batch(conn, n=5, risk_shift=0.0)
+        abandoned = [next(batch)["order_id"] for _ in range(3)]
+        batch.close()  # the viewer left before the batch committed
+        committed = [o["order_id"] for o in main._simulate_batch(conn, n=5, risk_shift=0.0)]
+    finally:
+        conn.close()
+    assert not set(abandoned) & set(committed)

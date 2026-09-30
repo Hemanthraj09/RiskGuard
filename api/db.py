@@ -293,8 +293,11 @@ def get_past_orders(conn: sqlite3.Connection, customer_id: str, before_ts: datet
 
 
 def insert_order(conn: sqlite3.Connection, order: dict) -> None:
+    # Plain INSERT, not INSERT OR REPLACE: an order_id collision must fail
+    # loudly rather than silently overwrite an order (and re-point every
+    # decision already logged against it at a different order).
     conn.execute(
-        "INSERT OR REPLACE INTO orders (order_id, customer_id, order_timestamp, order_value, "
+        "INSERT INTO orders (order_id, customer_id, order_timestamp, order_value, "
         "product_category, payment_mode, discount_applied, delivery_pincode_tier, returned, "
         "predicted_probability, risk_band, is_simulated) "
         "VALUES (:order_id, :customer_id, :order_timestamp, :order_value, :product_category, "
@@ -311,18 +314,6 @@ def random_existing_customer_ids(conn: sqlite3.Connection, n: int):
     return [r["customer_id"] for r in rows]
 
 
-def next_synthetic_customer_seq(conn: sqlite3.Connection) -> int:
-    row = conn.execute(
-        "SELECT COUNT(*) AS c FROM customers WHERE is_synthetic_new = 1"
-    ).fetchone()
-    return row["c"] + 1
-
-
-def next_order_seq(conn: sqlite3.Connection) -> int:
-    row = conn.execute("SELECT COUNT(*) AS c FROM orders").fetchone()
-    return row["c"] + 1
-
-
 def insert_decision(conn: sqlite3.Connection, order_id: str, analyst_decision: str, decided_at: datetime) -> None:
     conn.execute(
         "INSERT INTO decisions (order_id, analyst_decision, decided_at) VALUES (?, ?, ?)",
@@ -337,7 +328,7 @@ def get_recent_orders(conn: sqlite3.Connection, limit: int = 200):
     through the API), so they're excluded here."""
     rows = conn.execute(
         "SELECT * FROM orders WHERE predicted_probability IS NOT NULL "
-        "ORDER BY order_timestamp DESC LIMIT ?",
+        "ORDER BY order_timestamp DESC, rowid DESC LIMIT ?",
         (limit,),
     ).fetchall()
     return [dict(r) for r in rows]

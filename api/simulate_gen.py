@@ -23,6 +23,7 @@ it's enforced entirely by the caller.
 
 import os
 import sys
+import uuid
 
 import numpy as np
 
@@ -80,5 +81,7 @@ def sample_order_fields(risk_shift: float, rng: np.random.RandomState) -> dict:
     }
 
 
-def make_new_customer_id(seq: int) -> str:
-    return f"SIM{seq:06d}"
+def make_new_customer_id() -> str:
+    # Random, not a running count of rows already in the store: a count is
+    # handed out twice by two batches running concurrently.
+    return f"SIM-{uuid.uuid4().hex[:8].upper()}"

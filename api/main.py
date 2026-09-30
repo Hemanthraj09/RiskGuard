@@ -11,9 +11,11 @@ Run with:
 (from the riskguard/ directory)
 """
 
+import asyncio
 import json
 import os
 import sys
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -86,6 +88,10 @@ class DecideRequest(BaseModel):
 # ─────────────────────────────────────────────────────────────
 # Core order-scoring pipeline (shared by /score and /simulate)
 # ─────────────────────────────────────────────────────────────
+def _new_id(prefix: str, n_hex: int) -> str:
+    return f"{prefix}{uuid.uuid4().hex[:n_hex].upper()}"
+
+
 def _resolve_customer(conn, customer_id: Optional[str], order_timestamp: datetime, fallback_pincode_tier: str):
     """Returns (customer_id, customer_record, past_orders, is_new_customer)."""
     if customer_id:
@@ -100,7 +106,7 @@ def _resolve_customer(conn, customer_id: Optional[str], order_timestamp: datetim
             o["order_timestamp"] = datetime.strptime(o["order_timestamp"], db.TIMESTAMP_FORMAT)
         return customer_id, record, past, False
 
-    new_id = f"ADHOC{uuid.uuid4().hex[:8].upper()}"
+    new_id = _new_id("ADHOC", 8)
     db.insert_customer(conn, new_id, order_timestamp, fallback_pincode_tier, is_synthetic_new=True)
     return new_id, {"account_created_date": order_timestamp}, [], True
 
@@ -158,7 +164,7 @@ def score(req: ScoreRequest):
         if not customer_id.startswith(("ADHOC", "SIM")):
             order_fields["delivery_pincode_tier"] = customer_record.get("pincode_tier", req.delivery_pincode_tier)
 
-        order_id = f"ORD-{uuid.uuid4().hex[:10].upper()}"
+        order_id = _new_id("ORD-", 10)
         result = _score_and_persist(
             conn, customer_id, customer_record, past_orders, order_fields, order_timestamp, order_id, False
         )
@@ -188,8 +194,6 @@ def _simulate_batch(conn, n: int, risk_shift: float):
     # identically for either consumer.
     rng = np.random.RandomState()  # unseeded: each simulate call looks "live" and different
     base_ts = db.next_order_time(conn)
-    seq_start = db.next_order_seq(conn)
-    new_cust_seq = db.next_synthetic_customer_seq(conn)
 
     snapshot_cache: dict = {}  # customer_id -> (record, past_orders), pre-batch only
     pending_new_customers: list = []  # (customer_id, created_at, pincode_tier)
@@ -221,8 +225,7 @@ def _simulate_batch(conn, n: int, risk_shift: float):
             record, past_orders = load_snapshot(customer_id)
             order_fields["delivery_pincode_tier"] = record["pincode_tier"]
         else:
-            customer_id = make_new_customer_id(new_cust_seq)
-            new_cust_seq += 1
+            customer_id = make_new_customer_id()
             record = {"account_created_date": order_timestamp}
             past_orders = []
             pending_new_customers.append((customer_id, order_timestamp, order_fields["delivery_pincode_tier"]))
@@ -233,7 +236,7 @@ def _simulate_batch(conn, n: int, risk_shift: float):
         result = scoring.score_order(order_fields, customer_features)
         customer_features["has_return_history"] = any(o.get("returned") is not None for o in past_orders)
 
-        order_id = f"SIMORD{seq_start + i:07d}"
+        order_id = _new_id("SIMORD-", 10)
         pending_orders.append({
             "order_id": order_id,
             "customer_id": customer_id,
@@ -282,25 +285,66 @@ def simulate(req: SimulateRequest):
         conn.close()
 
 
+_STREAM_END = object()
+
+
+def _run_simulation(n: int, risk_shift: float, emit) -> None:
+    """Scores and commits one /simulate/stream batch start to finish on the
+    calling thread, handing each result to `emit` as it's scored, then a
+    final {"done": ...} event -- sent only after the batch has committed, so
+    a client that sees "done" can act on every order in it -- or an
+    {"error": ...} event if the batch fails (nothing is committed then).
+
+    Runs on one dedicated thread per batch rather than inside the response
+    iterator: Starlette advances a sync iterator from whichever threadpool
+    worker is free, and a SQLite connection may only be used by the thread
+    that opened it, so any concurrent request made the stream crash mid-batch.
+    Owning the thread also decouples the batch from the connection -- if the
+    viewer navigates away or drops mid-stream, the batch still finishes and
+    commits, so every order they were shown really exists."""
+    conn = db.get_connection()
+    try:
+        band_counts = {"low": 0, "medium": 0, "high": 0}
+        for result in _simulate_batch(conn, n, risk_shift):
+            band_counts[result["risk_band"]] += 1
+            emit(result)
+        emit({"done": True, "band_counts": band_counts})
+    except Exception as exc:
+        emit({"error": f"Simulation failed: {exc}"})
+        raise
+    finally:
+        conn.close()
+
+
 @app.get("/simulate/stream")
-def simulate_stream(
+async def simulate_stream(
     n: int = Query(default=100, ge=1, le=500),
     risk_shift: float = Query(default=0.0, ge=0.0, le=1.0),
 ):
     """SSE variant of /simulate for the Simulation Console's live feed: same
-    batch-isolation guarantee and same DB-write timing as the POST endpoint
+    batch-isolation guarantee and same atomic commit as the POST endpoint
     (see _simulate_batch) -- this only changes how results reach the client,
     streaming each one as it's scored instead of waiting for the whole batch."""
-    def event_stream():
-        conn = db.get_connection()
+    loop = asyncio.get_running_loop()
+    events: asyncio.Queue = asyncio.Queue()
+
+    def emit(item) -> None:
         try:
-            band_counts = {"low": 0, "medium": 0, "high": 0}
-            for result in _simulate_batch(conn, n, risk_shift):
-                band_counts[result["risk_band"]] += 1
-                yield f"data: {json.dumps(result)}\n\n"
-            yield f"data: {json.dumps({'done': True, 'band_counts': band_counts})}\n\n"
+            loop.call_soon_threadsafe(events.put_nowait, item)
+        except RuntimeError:
+            pass  # event loop already closed (server shutting down) -- keep going so the batch still commits
+
+    def worker() -> None:
+        try:
+            _run_simulation(n, risk_shift, emit)
         finally:
-            conn.close()
+            emit(_STREAM_END)
+
+    threading.Thread(target=worker, name="simulate-stream", daemon=False).start()
+
+    async def event_stream():
+        while (item := await events.get()) is not _STREAM_END:
+            yield f"data: {json.dumps(item)}\n\n"
 
     return StreamingResponse(
         event_stream(),
