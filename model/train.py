@@ -168,10 +168,11 @@ def main():
     # 2. Train LightGBM on train.csv only
     print("[2/5] Training LightGBM classifier...")
     # Deliberately low-capacity: ~7.9k training rows and a signal ceiling of
-    # ~0.71-0.73 AUC (verified against the true generative probability) mean
-    # a deep/wide model just memorizes noise. max_depth=7/num_leaves=63/500
-    # trees drove train AUC to 0.96 while held-out test AUC collapsed to
-    # 0.66. This config keeps train/validation/test AUC close together.
+    # ~0.82 AUC (verified against the true generative probability) mean a
+    # deep/wide model just memorizes noise. On the earlier, noisier dataset
+    # (ceiling ~0.715), max_depth=7/num_leaves=63/500 trees drove train AUC
+    # to 0.96 while held-out test AUC collapsed to 0.66. This config keeps
+    # train/validation/test AUC close together (0.814 / 0.815 / 0.812).
     model = lgb.LGBMClassifier(
         n_estimators=100,
         max_depth=3,

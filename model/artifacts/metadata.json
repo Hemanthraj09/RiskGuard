@@ -99,11 +99,11 @@
   ],
   "n_train_samples": 7918,
   "n_validation_samples": 1828,
-  "train_positive_rate": 0.21318514776458702,
-  "validation_positive_rate": 0.21334792122538293,
-  "raw_train_auc": 0.7536,
-  "raw_validation_auc": 0.7389,
-  "calibrated_validation_auc": 0.7422,
+  "train_positive_rate": 0.1920939631220005,
+  "validation_positive_rate": 0.18326039387308535,
+  "raw_train_auc": 0.814,
+  "raw_validation_auc": 0.8153,
+  "calibrated_validation_auc": 0.8182,
   "calibrator": "BaggedIsotonicCalibrator(n_bags=50, seed=42)",
-  "comparison_single_isotonic_validation_auc": 0.7474
+  "comparison_single_isotonic_validation_auc": 0.8232
 }

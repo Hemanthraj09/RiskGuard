@@ -75,7 +75,7 @@ if API_SCRIPT_DIR not in sys.path:
     sys.path.insert(0, API_SCRIPT_DIR)
 
 from train import prepare_features  # noqa: E402 (reuse the exact training-time encoder)
-from generate_data import generate_return_probability, PRIOR_ALPHA, PRIOR_BETA, LABEL_NOISE_RATE  # noqa: E402
+from generate_data import generate_return_probability, PRIOR_ALPHA, PRIOR_BETA  # noqa: E402
 from simulate_gen import sample_order_fields  # noqa: E402 (for the risk-shifted calibration probe)
 
 # ─────────────────────────────────────────────────────────────
@@ -399,10 +399,7 @@ def probe_shifted_calibration(model, calibrator, metadata, risk_shift, n_orders=
             "order_value_vs_customer_avg": 1.0,
         }
         prob = generate_return_probability(row)
-        label = int(label_rng.binomial(1, prob))
-        if label_rng.random() < LABEL_NOISE_RATE:
-            label = 1 - label
-        row["returned"] = label
+        row["returned"] = int(label_rng.binomial(1, prob))
         row["category_x_payment_mode"] = f"{row['product_category']}_{row['payment_mode']}"
         row["pincode_tier_x_category"] = f"{row['delivery_pincode_tier']}_{row['product_category']}"
         rows.append(row)

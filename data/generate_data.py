@@ -4,8 +4,9 @@ RiskGuard — Synthetic Data Generator
 Generates ~12,000 e-commerce orders across ~2,500 customers with:
 - Realistic multi-order customer histories
 - Temporal features computed strictly from past orders (no leakage)
-- Labels from the locked function in Section 5.2 of the spec
-- 6% label noise to cap achievable AUC at realistic levels
+- Labels from the locked function in Section 5.2 of the spec, drawn as
+  Bernoulli(true return probability) -- the draw itself is the irreducible
+  noise; there is no extra label-flip layer (see the retune note below)
 - Temporal 3-way split (65% train / 15% validation / 20% test by timestamp; validation selects the cost-optimal threshold, test is never touched until final reporting)
 
 All random processes use fixed seeds for reproducibility (Section 5.4).
@@ -38,7 +39,6 @@ SIM_END = datetime(2024, 6, 30)
 SIM_DAYS = (SIM_END - SIM_START).days  # 181 days
 
 N_CUSTOMERS = 2500
-LABEL_NOISE_RATE = 0.06
 
 CATEGORIES = [
     "footwear", "apparel", "electronics_accessories",
@@ -64,10 +64,23 @@ PRIOR_BETA = 8  # Prior mean = 2 / (2 + 8) = 0.20
 # that closing the gap purely by widening spread pushes the *overall*
 # return rate to 27-31%, unrealistic for a catalog mostly made of
 # groceries/electronics. These constants ("SWEET-3") instead land on a
-# balance: real trained-model AUC ~0.72, overall return rate ~22%,
-# footwear/apparel ~35-42% (COD/fashion returns run high in Indian
-# e-commerce), groceries/electronics ~7-12%. Approved by the user after
-# reviewing the tradeoff -- do not modify again without new sign-off.
+# balance (with the label flips described below still in place): real
+# trained-model AUC ~0.71, overall return rate ~22%, footwear/apparel
+# ~35-42% (COD/fashion returns run high in Indian e-commerce),
+# groceries/electronics ~7-12%. Approved by the user after reviewing the
+# tradeoff.
+#
+# SECOND RETUNE (label flips removed; approved by the user 2026-09-30):
+# every label used to get a further 6% chance of being flipped at random
+# on top of the Bernoulli draw. That double-counted noise -- the draw
+# already stands in for everything the features can't see -- and turned
+# roughly a fifth of all recorded returns into pure coin-flips no model
+# could predict (it's also why groceries showed an implausible ~12% return
+# rate). With the flips gone, RETURN_RATE_SCALE sets the overall return
+# level so fashion keeps realistic COD-heavy rates while low-return
+# categories fall to realistic ones. The category/payment constants above
+# are unchanged. Do not modify again without new sign-off.
+RETURN_RATE_SCALE = 1.10
 CATEGORY_BASE = {
     "footwear": 0.32,
     "apparel": 0.25,
@@ -101,7 +114,8 @@ def generate_return_probability(row: dict) -> float:
     """
     Locked label-generation function from Section 5.2 (retuned, see note above).
     Combines category base rate, payment multiplier, customer history,
-    non-monotonic value effect, and pincode × category interaction.
+    non-monotonic value effect, pincode × category interaction, and the
+    overall return level.
     """
     base = CATEGORY_BASE[row["product_category"]]
     prob = base * PAYMENT_MULTIPLIER[row["payment_mode"]]
@@ -121,6 +135,9 @@ def generate_return_probability(row: dict) -> float:
         prob *= 1.55
     elif row["delivery_pincode_tier"] == "metro":
         prob *= 0.78
+
+    # Overall return level (see the second-retune note above)
+    prob *= RETURN_RATE_SCALE
 
     # Clip to valid probability
     prob = float(np.clip(prob, 0.01, 0.90))
@@ -303,12 +320,8 @@ def compute_temporal_features_and_labels(orders: list) -> list:
         # ── Generate label using locked function ──
         prob = generate_return_probability(order)
         order["return_probability"] = round(prob, 6)  # Keep for analysis only
+        # The Bernoulli draw is the only label noise -- no flips on top
         label = int(np.random.binomial(1, prob))
-
-        # Apply 6% label noise
-        if np.random.random() < LABEL_NOISE_RATE:
-            label = 1 - label
-
         order["returned"] = label
 
         # Record into history AFTER labeling

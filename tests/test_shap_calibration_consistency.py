@@ -89,7 +89,7 @@ def test_shap_sum_matches_raw_uncalibrated_output():
 def test_mean_calibrated_probability_tracks_true_base_rate():
     """
     is_unbalance=True during training skews raw probabilities well above the
-    true base rate (mean raw ~0.44 vs a ~22% actual positive rate) -- this
+    true base rate (mean raw ~0.42 vs a ~19% actual positive rate) -- this
     confirms isotonic calibration, fit on validation, actually corrects that
     skew back toward the truth on a fully independent test set.
     """
