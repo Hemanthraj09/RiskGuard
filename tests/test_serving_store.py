@@ -260,3 +260,30 @@ def test_abandoned_batch_does_not_recycle_order_ids(store):
     finally:
         conn.close()
     assert not set(abandoned) & set(committed)
+
+
+def test_score_uses_the_tier_on_file_for_known_customers(client):
+    train = _splits()["train"]
+    customer_id, tier_on_file = train.iloc[0]["customer_id"], train.iloc[0]["delivery_pincode_tier"]
+    other_tier = next(t for t in ("metro", "tier2", "tier3") if t != tier_on_file)
+    seeded = client.post("/score", json={**ORDER, "delivery_pincode_tier": other_tier, "customer_id": customer_id})
+    assert seeded.json()["delivery_pincode_tier"] == tier_on_file
+
+    # A customer the API itself created is on file too (it used to be exempt by ID prefix).
+    first = client.post("/score", json={**ORDER, "delivery_pincode_tier": "tier3"}).json()
+    again = client.post("/score", json={**ORDER, "delivery_pincode_tier": "metro", "customer_id": first["customer_id"]})
+    assert again.json()["delivery_pincode_tier"] == "tier3"
+
+    brand_new = client.post("/score", json={**ORDER, "delivery_pincode_tier": "metro", "customer_id": "NEW-CUSTOMER-1"})
+    assert brand_new.json()["delivery_pincode_tier"] == "metro"
+
+
+def test_orders_feed_reconstructs_what_scoring_reported(client):
+    scored = [
+        client.post("/score", json={**ORDER, "order_value": value, "product_category": category}).json()
+        for value in (350.0, 2900.0, 9000.0) for category in ("footwear", "groceries")
+    ]
+    feed = {o["order_id"]: o for o in client.get("/orders", params={"limit": 50}).json()["orders"]}
+    fields = ("probability", "risk_band", "recommendation", "recommended_action", "optimal_threshold")
+    for s in scored:
+        assert tuple(feed[s["order_id"]][f] for f in fields) == tuple(s[f] for f in fields)

@@ -153,16 +153,20 @@ def _score_and_persist(conn, customer_id: str, customer_record: dict, past_order
 # ─────────────────────────────────────────────────────────────
 @app.post("/score")
 def score(req: ScoreRequest):
+    """Scores one order. For a customer already on file, delivery_pincode_tier
+    is taken from their record rather than the request -- a customer has one
+    delivery location, as in the training data -- and the response reflects
+    the tier actually scored."""
     conn = db.get_connection()
     try:
         order_timestamp = db.next_order_time(conn)
         order_fields = req.model_dump(exclude={"customer_id"})
 
-        customer_id, customer_record, past_orders, _ = _resolve_customer(
+        customer_id, customer_record, past_orders, is_new_customer = _resolve_customer(
             conn, req.customer_id, order_timestamp, req.delivery_pincode_tier
         )
-        if not customer_id.startswith(("ADHOC", "SIM")):
-            order_fields["delivery_pincode_tier"] = customer_record.get("pincode_tier", req.delivery_pincode_tier)
+        if not is_new_customer:
+            order_fields["delivery_pincode_tier"] = customer_record["pincode_tier"]
 
         order_id = _new_id("ORD-", 10)
         result = _score_and_persist(
@@ -361,8 +365,8 @@ def orders(limit: int = Query(default=200, ge=1, le=1000)):
     the original scoring pass (temporal features off frozen history, SHAP
     off the live model) and aren't reconstructed here, so they come back
     null; recommendation/recommended_action/optimal_threshold are cheap,
-    deterministic derivations of the already-stored risk_band and are
-    reconstructed exactly."""
+    deterministic derivations of the stored probability and risk_band and
+    are reconstructed exactly."""
     conn = db.get_connection()
     try:
         rows = db.get_recent_orders(conn, limit=limit)
@@ -381,7 +385,7 @@ def orders(limit: int = Query(default=200, ge=1, le=1000)):
                 "delivery_pincode_tier": r["delivery_pincode_tier"],
                 "probability": probability,
                 "risk_band": band,
-                "recommendation": "flag_for_verification" if probability >= scoring.OPTIMAL_THRESHOLD else "accept_normally",
+                "recommendation": scoring.recommendation(probability),
                 "recommended_action": scoring.recommend_action(band, r["payment_mode"], r["product_category"]),
                 "optimal_threshold": scoring.OPTIMAL_THRESHOLD,
                 "top_contributors": None,

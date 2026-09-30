@@ -102,6 +102,10 @@ def risk_band(probability: float) -> str:
     return "high"
 
 
+def recommendation(probability: float) -> str:
+    return "flag_for_verification" if probability >= OPTIMAL_THRESHOLD else "accept_normally"
+
+
 _SIZING_SENSITIVE_CATEGORIES = {"footwear", "apparel"}
 
 
@@ -155,13 +159,16 @@ def score_order(order_fields: dict, customer_features: dict) -> dict:
         for name, val in contributions[:5]
     ]
 
-    band = risk_band(calibrated_prob)
-    recommendation = "flag_for_verification" if calibrated_prob >= OPTIMAL_THRESHOLD else "accept_normally"
+    # Band and recommendation come from the same rounded probability that's
+    # returned and stored, so GET /orders -- which re-derives them from the
+    # stored value -- always agrees with what /score and /simulate reported.
+    probability = round(calibrated_prob, 4)
+    band = risk_band(probability)
 
     return {
-        "probability": round(calibrated_prob, 4),
+        "probability": probability,
         "risk_band": band,
-        "recommendation": recommendation,
+        "recommendation": recommendation(probability),
         "recommended_action": recommend_action(band, order_fields["payment_mode"], order_fields["product_category"]),
         "optimal_threshold": OPTIMAL_THRESHOLD,
         "top_contributors": top_contributors,
