@@ -1,17 +1,19 @@
-export function ConfusionMatrix({ matrix }: { matrix: [[number, number], [number, number]] }) {
-  const [[tn, fp], [fn, tp]] = matrix;
-  const total = tn + fp + fn + tp;
-  const pct = (v: number) => (total > 0 ? `${((v / total) * 100).toFixed(1)}%` : "-");
-
-  const Cell = ({
-    label,
-    value,
-    tone,
-  }: {
-    label: string;
-    value: number;
-    tone: "good" | "critical";
-  }) => (
+// Module-level, not defined inside ConfusionMatrix: a component created during
+// render is a brand-new component type every render, so React would unmount
+// and remount all four cells on each cost-slider move.
+function Cell({
+  label,
+  value,
+  total,
+  tone,
+}: {
+  label: string;
+  value: number;
+  total: number;
+  tone: "good" | "critical";
+}) {
+  const share = total > 0 ? `${((value / total) * 100).toFixed(1)}%` : "-";
+  return (
     <div
       className="flex flex-col items-center justify-center rounded-lg p-4"
       style={{
@@ -25,10 +27,15 @@ export function ConfusionMatrix({ matrix }: { matrix: [[number, number], [number
         {value.toLocaleString()}
       </div>
       <div className="mt-0.5 text-xs" style={{ color: "var(--text-secondary)" }}>
-        {label} &middot; {pct(value)}
+        {label} &middot; {share}
       </div>
     </div>
   );
+}
+
+export function ConfusionMatrix({ matrix }: { matrix: [[number, number], [number, number]] }) {
+  const [[tn, fp], [fn, tp]] = matrix;
+  const total = tn + fp + fn + tp;
 
   return (
     <div>
@@ -49,8 +56,8 @@ export function ConfusionMatrix({ matrix }: { matrix: [[number, number], [number
           <br />
           No return
         </div>
-        <Cell label="True Negative" value={tn} tone="good" />
-        <Cell label="False Positive" value={fp} tone="critical" />
+        <Cell label="True Negative" value={tn} total={total} tone="good" />
+        <Cell label="False Positive" value={fp} total={total} tone="critical" />
 
         <div
           className="flex items-center justify-center px-2 text-center font-medium"
@@ -60,8 +67,8 @@ export function ConfusionMatrix({ matrix }: { matrix: [[number, number], [number
           <br />
           Returned
         </div>
-        <Cell label="False Negative" value={fn} tone="critical" />
-        <Cell label="True Positive" value={tp} tone="good" />
+        <Cell label="False Negative" value={fn} total={total} tone="critical" />
+        <Cell label="True Positive" value={tp} total={total} tone="good" />
       </div>
     </div>
   );

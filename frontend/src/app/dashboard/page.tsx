@@ -13,6 +13,7 @@ const rupees = (v: number) => `Rs.${v.toLocaleString(undefined, { maximumFractio
 const CATEGORIES = ["footwear", "apparel", "electronics_accessories", "groceries", "home_goods", "beauty"];
 const PAYMENT_MODES = ["COD", "prepaid_card", "UPI", "wallet"];
 const TIERS = ["metro", "tier2", "tier3"];
+const MAX_ORDER_VALUE = 100000; // POST /score's upper bound
 
 function ManualScoreForm({ onScored }: { onScored: (order: ScoredOrder) => void }) {
   const [open, setOpen] = useState(false);
@@ -24,6 +25,10 @@ function ManualScoreForm({ onScored }: { onScored: (order: ScoredOrder) => void 
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit() {
+    if (!(orderValue > 0 && orderValue <= MAX_ORDER_VALUE)) {
+      setError(`Order value must be more than Rs.0 and at most ${rupees(MAX_ORDER_VALUE)}.`);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -145,11 +150,6 @@ function DecisionButtons({ order, onDecided }: { order: ScoredOrder; onDecided: 
   const [pending, setPending] = useState<AnalystDecision | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setRecorded(null);
-    setError(null);
-  }, [order.order_id]);
-
   async function handleDecide(decision: AnalystDecision) {
     setPending(decision);
     setError(null);
@@ -243,7 +243,9 @@ function OrderDetail({ order, onDecided }: { order: ScoredOrder; onDecided: () =
         {order.recommended_action}
       </div>
 
-      <DecisionButtons order={order} onDecided={onDecided} />
+      {/* Keyed by order, so selecting another order starts from a clean slate
+          (no "Decision recorded" or error carried over from the last one). */}
+      <DecisionButtons key={order.order_id} order={order} onDecided={onDecided} />
 
       <dl className="mt-5 grid grid-cols-2 gap-y-2 text-sm">
         <dt style={{ color: "var(--text-muted)" }}>Category</dt>
