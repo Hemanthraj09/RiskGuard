@@ -23,10 +23,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 from features_core import compute_all_temporal_features  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────
-# Fixed Seeds (Section 5.4)
+# Fixed Seeds (Section 5.4) -- applied at the start of main(), not at import:
+# the API, the evaluator and the tests all import this module for its
+# constants and label function, and must not have NumPy's global RNG
+# silently reseeded as a side effect of that import.
 # ─────────────────────────────────────────────────────────────
-np.random.seed(42)
-random.seed(42)
+SEED = 42
 
 # ─────────────────────────────────────────────────────────────
 # Constants
@@ -356,6 +358,9 @@ OUTPUT_COLUMNS = [
 # Main Pipeline
 # ─────────────────────────────────────────────────────────────
 def main():
+    np.random.seed(SEED)
+    random.seed(SEED)
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
     output_dir = os.path.join(script_dir, "processed")
 
@@ -385,7 +390,10 @@ def main():
     df["order_timestamp"] = df["order_timestamp"].apply(
         lambda x: x.strftime("%Y-%m-%d %H:%M:%S")
     )
-    df = df.sort_values("order_timestamp").reset_index(drop=True)
+    # Stable sort: rows were already ordered by (timestamp, order_id) above,
+    # and a few orders share a timestamp once it's truncated to the second --
+    # quicksort's tie order isn't guaranteed across pandas versions.
+    df = df.sort_values("order_timestamp", kind="stable").reset_index(drop=True)
 
     # 5. Temporal 3-way split (65% train / 15% validation / 20% test)
     #
