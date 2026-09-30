@@ -12,8 +12,9 @@ and sends an actual POST over the network.
 
 Why this can't just be "pick a test.csv row, POST its fields with its real
 customer_id, expect probabilities to match": /score computes a customer's
-past orders as of datetime.utcnow() (see api/main.py's _resolve_customer),
-not as of the historical row's original timestamp. For any customer with
+past orders as of the API's current time -- the store's clock, one second
+after the latest order on record (api/db.py's next_order_time) -- not as of
+the historical row's original timestamp. For any customer with
 orders after the chosen row, that pulls in orders from the future relative
 to the row being tested -- a different, invalid feature vector, not the one
 used at training time. Comparing against that would fail for the wrong
@@ -26,8 +27,8 @@ path (api/main.py's _resolve_customer, the `else` branch: brand-new ad-hoc
 customer, past_orders=[]).
 
 One subtlety this script does NOT paper over: cold-start account_age_days.
-/score's ad-hoc path sets account_created_date = utcnow(), so it always
-computes account_age_days=0. But data/generate_data.py gives every customer
+/score's ad-hoc path sets account_created_date to the order's own
+timestamp, so it always computes account_age_days=0. But data/generate_data.py gives every customer
 a signup date measurably before their first order (min observed: 5 days
 across the full dataset) -- so no real "first order" row has
 account_age_days=0, and picking one whose *other* four cold-start features
@@ -71,8 +72,8 @@ from train import prepare_features  # noqa: E402
 def pick_first_order_row() -> pd.Series:
     """A test.csv row that is its customer's first order in the dataset:
     bayesian_return_rate at the prior default (~0.2), no purchase frequency,
-    no prior order to measure recency against. Sidesteps the utcnow()
-    "future orders" trap entirely, since a first order has no history under
+    no prior order to measure recency against. Sidesteps the "future
+    orders" trap entirely, since a first order has no history under
     any current timestamp."""
     df = pd.read_csv(os.path.join(DATA_DIR, "test.csv"))
     cold = df[(df["days_since_last_order"] == -1) & (df["customer_purchase_frequency"] == 0.0)]

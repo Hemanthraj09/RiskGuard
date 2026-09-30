@@ -1,7 +1,8 @@
 """
 RiskGuard — FastAPI serving layer.
 
-Minimal surface per the spec: POST /score, POST /simulate, GET /metrics.
+Endpoints: POST /score, POST /simulate, GET /simulate/stream, GET /orders,
+GET /metrics, POST /decide, GET /decisions, GET /health.
 No auth, no policy engine, no autonomous execution — this is a scoring /
 decision-support tool only (defense-only constraint).
 
@@ -93,10 +94,10 @@ def _resolve_customer(conn, customer_id: Optional[str], order_timestamp: datetim
             created = {"account_created_date": order_timestamp}
             db.insert_customer(conn, customer_id, order_timestamp, fallback_pincode_tier, is_synthetic_new=True)
             return customer_id, created, [], True
-        record["account_created_date"] = datetime.strptime(record["account_created_date"], "%Y-%m-%d %H:%M:%S")
+        record["account_created_date"] = datetime.strptime(record["account_created_date"], db.TIMESTAMP_FORMAT)
         past = db.get_past_orders(conn, customer_id, order_timestamp)
         for o in past:
-            o["order_timestamp"] = datetime.strptime(o["order_timestamp"], "%Y-%m-%d %H:%M:%S")
+            o["order_timestamp"] = datetime.strptime(o["order_timestamp"], db.TIMESTAMP_FORMAT)
         return customer_id, record, past, False
 
     new_id = f"ADHOC{uuid.uuid4().hex[:8].upper()}"
@@ -119,7 +120,7 @@ def _score_and_persist(conn, customer_id: str, customer_record: dict, past_order
     db.insert_order(conn, {
         "order_id": order_id,
         "customer_id": customer_id,
-        "order_timestamp": order_timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+        "order_timestamp": order_timestamp.strftime(db.TIMESTAMP_FORMAT),
         "order_value": order_fields["order_value"],
         "product_category": order_fields["product_category"],
         "payment_mode": order_fields["payment_mode"],
@@ -148,7 +149,7 @@ def _score_and_persist(conn, customer_id: str, customer_record: dict, past_order
 def score(req: ScoreRequest):
     conn = db.get_connection()
     try:
-        order_timestamp = datetime.utcnow()
+        order_timestamp = db.next_order_time(conn)
         order_fields = req.model_dump(exclude={"customer_id"})
 
         customer_id, customer_record, past_orders, _ = _resolve_customer(
@@ -186,7 +187,7 @@ def _simulate_batch(conn, n: int, risk_shift: float):
     # caller commits anything, so the isolation guarantee above holds
     # identically for either consumer.
     rng = np.random.RandomState()  # unseeded: each simulate call looks "live" and different
-    base_ts = datetime.utcnow()
+    base_ts = db.next_order_time(conn)
     seq_start = db.next_order_seq(conn)
     new_cust_seq = db.next_synthetic_customer_seq(conn)
 
@@ -198,10 +199,10 @@ def _simulate_batch(conn, n: int, risk_shift: float):
         if customer_id in snapshot_cache:
             return snapshot_cache[customer_id]
         record = db.get_customer(conn, customer_id)
-        record["account_created_date"] = datetime.strptime(record["account_created_date"], "%Y-%m-%d %H:%M:%S")
+        record["account_created_date"] = datetime.strptime(record["account_created_date"], db.TIMESTAMP_FORMAT)
         past_orders = db.get_past_orders(conn, customer_id, base_ts)
         for o in past_orders:
-            o["order_timestamp"] = datetime.strptime(o["order_timestamp"], "%Y-%m-%d %H:%M:%S")
+            o["order_timestamp"] = datetime.strptime(o["order_timestamp"], db.TIMESTAMP_FORMAT)
         snapshot_cache[customer_id] = (record, past_orders)
         return record, past_orders
 
@@ -236,7 +237,7 @@ def _simulate_batch(conn, n: int, risk_shift: float):
         pending_orders.append({
             "order_id": order_id,
             "customer_id": customer_id,
-            "order_timestamp": order_timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "order_timestamp": order_timestamp.strftime(db.TIMESTAMP_FORMAT),
             "order_value": order_fields["order_value"],
             "product_category": order_fields["product_category"],
             "payment_mode": order_fields["payment_mode"],
