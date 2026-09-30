@@ -21,6 +21,15 @@ a "returned-ish" order if that same customer has ANY cancellation invoice
 within the following 30 days -- a proxy for "this purchase episode was
 followed by a return/cancellation," not a verified per-item return match.
 
+Customer history has to respect that label's latency: a past invoice's
+label depends on cancellations up to 30 days AFTER it, so at time T it's
+only known once that window has closed. customer_prior_cancel_rate counts
+only those resolved invoices. (An earlier version counted every past
+invoice, reading the future -- one cancellation at T+10d labels both a
+past invoice at T-5d and this one -- and reported an inflated 0.78 test
+AUC; that leaky variant is still computed below, clearly labeled, so the
+size of the leak stays visible.)
+
 Usage:
     python experiments/uci_transfer_check.py /path/to/Online Retail.xlsx
 """
@@ -84,7 +93,7 @@ def label_and_engineer(invoices: pd.DataFrame, cancellations: dict) -> pd.DataFr
     # Chronological per-customer history for the causal features below.
     invoices = invoices.sort_values(["customer_id", "invoice_date"]).reset_index(drop=True)
 
-    bayes_rates, freqs, days_since, labels = [], [], [], []
+    bayes_rates, leaky_bayes_rates, freqs, days_since, labels = [], [], [], [], []
     history: dict = {}  # customer_id -> list of (date, was_labeled_return)
 
     for row in invoices.itertuples(index=False):
@@ -92,10 +101,12 @@ def label_and_engineer(invoices: pd.DataFrame, cancellations: dict) -> pd.DataFr
         T = row.invoice_date
         past = history.get(cid, [])
 
-        past_returns = sum(1 for (_, r) in past if r == 1)
-        past_count = len(past)
-        bayes_rates.append((past_returns + PRIOR_ALPHA) / (past_count + PRIOR_ALPHA + PRIOR_BETA))
-        freqs.append(past_count)
+        # Only past invoices whose 30-day label window has closed by T have a
+        # known label at T (see module docstring).
+        resolved = [r for (d, r) in past if d + window <= T]
+        bayes_rates.append((sum(resolved) + PRIOR_ALPHA) / (len(resolved) + PRIOR_ALPHA + PRIOR_BETA))
+        leaky_bayes_rates.append((sum(r for (_, r) in past) + PRIOR_ALPHA) / (len(past) + PRIOR_ALPHA + PRIOR_BETA))
+        freqs.append(len(past))
         days_since.append((T - past[-1][0]).days if past else -1)
 
         # Label: any cancellation for this customer within the next 30 days.
@@ -107,6 +118,7 @@ def label_and_engineer(invoices: pd.DataFrame, cancellations: dict) -> pd.DataFr
 
     invoices = invoices.copy()
     invoices["customer_prior_cancel_rate"] = bayes_rates
+    invoices["customer_prior_cancel_rate_leaky"] = leaky_bayes_rates  # diagnostic only
     invoices["customer_prior_order_count"] = freqs
     invoices["days_since_last_order"] = days_since
     invoices["returned"] = labels
@@ -175,51 +187,49 @@ def main(path: str):
     invoices["country_grp"] = invoices["country"].where(invoices["country"].isin(top_countries), "other")
     split_idx = int(len(invoices) * 0.80)
 
-    print("[3/4] Leak check: does the label-window proxy mechanically inflate AUC?")
+    print("[3/4] Label-window diagnostic: how clustered is the 30-day proxy label?")
     overlap_frac = check_window_overlap(invoices, window_days=15)
     print(
         f"      {overlap_frac * 100:.1f}% of positive-labeled invoices have another "
-        f"positive-labeled invoice from the SAME customer within 15 days -- if this is "
-        f"high, nearby invoices don't get independent labels (one cancellation event "
-        f"labels a whole cluster of orders), which lets history features partly learn "
-        f"'this customer is currently in a cancellation episode' rather than per-order risk."
+        f"positive-labeled invoice from the SAME customer within 15 days -- one "
+        f"cancellation event labels a whole cluster of nearby orders, so a history "
+        f"feature that can see still-open labels partly learns 'this customer is "
+        f"mid-cancellation-episode' rather than per-order risk."
     )
 
-    full_cols = ["order_value", "n_items", "avg_unit_price",
-                 "customer_prior_cancel_rate", "customer_prior_order_count", "days_since_last_order"]
     order_only_cols = ["order_value", "n_items", "avg_unit_price"]
+    history_cols = ["customer_prior_order_count", "days_since_last_order"]
+    full_cols = order_only_cols + ["customer_prior_cancel_rate"] + history_cols
+    leaky_cols = order_only_cols + ["customer_prior_cancel_rate_leaky"] + history_cols
 
-    print("[4/4] Training FULL feature set vs. ORDER-LEVEL-ONLY (no customer history)...")
+    print("[4/4] Training FULL (causal history) vs. ORDER-LEVEL-ONLY, plus the leaky variant as a diagnostic...")
     train_auc_full, test_auc_full, imp_full = fit_and_auc(invoices, full_cols, split_idx)
-    train_auc_order, test_auc_order, imp_order = fit_and_auc(invoices, order_only_cols, split_idx)
+    train_auc_order, test_auc_order, _ = fit_and_auc(invoices, order_only_cols, split_idx)
+    train_auc_leaky, test_auc_leaky, imp_leaky = fit_and_auc(invoices, leaky_cols, split_idx)
 
     print(f"\n{'=' * 60}")
     print("RESULT")
     print(f"{'=' * 60}")
-    print(f"FULL feature set        -- train AUC {train_auc_full:.4f}  test AUC {test_auc_full:.4f}")
+    print(f"FULL (causal history)         -- train AUC {train_auc_full:.4f}  test AUC {test_auc_full:.4f}")
     print(f"  top feature: {imp_full[0][0]} (importance {imp_full[0][1]:.0f}, next highest {imp_full[1][1]:.0f})")
     print(f"ORDER-LEVEL-ONLY (no history) -- train AUC {train_auc_order:.4f}  test AUC {test_auc_order:.4f}")
+    print(f"[diagnostic] LEAKY history    -- train AUC {train_auc_leaky:.4f}  test AUC {test_auc_leaky:.4f}")
+    print(f"  top feature: {imp_leaky[0][0]} (importance {imp_leaky[0][1]:.0f}, next highest {imp_leaky[1][1]:.0f})")
     print(f"Same-customer label-window overlap: {overlap_frac * 100:.1f}%")
 
-    drop = test_auc_full - test_auc_order
     print(
-        f"\nFINDING: removing customer-history features drops test AUC by "
-        f"{drop:.4f} ({test_auc_full:.3f} -> {test_auc_order:.3f}), and "
-        f"customer_prior_cancel_rate alone dominates feature importance in the full "
-        f"model. Combined with {overlap_frac * 100:.0f}% of positive labels clustering "
-        f"with another positive from the same customer within 15 days, the headline "
-        f"{test_auc_full:.2f} AUC is substantially inflated by the 30-day-window label "
-        f"construction (partly circular: 'this customer is mid-cancellation-episode' "
-        f"predicting 'this customer is mid-cancellation-episode'), NOT purely genuine "
-        f"order-level return-risk signal. This is a real limitation of the proxy label, "
-        f"not evidence the approach doesn't transfer.\n"
-        f"\nThe more honest number to compare against the main model is the "
+        f"\nFINDING: with customer history restricted to labels that are actually known "
+        f"at order time, the full model scores {test_auc_full:.4f} test AUC vs. "
+        f"{test_auc_order:.4f} for order-level features alone -- customer history adds "
+        f"{test_auc_full - test_auc_order:+.4f}. The leaky variant's {test_auc_leaky:.4f} "
+        f"is an artifact of reading still-open 30-day label windows ({overlap_frac * 100:.0f}% "
+        f"of positives sit within 15 days of another positive from the same customer), "
+        f"not transferable signal -- {test_auc_leaky - test_auc_full:+.4f} of it came "
+        f"from the future.\n"
+        f"\nThe number structurally comparable to the main synthetic model is the "
         f"ORDER-LEVEL-ONLY result: {test_auc_order:.4f} test AUC using just order value, "
-        f"item count, unit price, and country -- still meaningfully above 0.5 (real "
-        f"signal in order-level features on genuine real-world data), and structurally "
-        f"more comparable to what the main synthetic model relies on (category, "
-        f"payment mode, value), without leaning on this dataset's specific label-"
-        f"construction mechanics."
+        f"item count, unit price, and country -- meaningfully above 0.5 on genuine "
+        f"real-world data, without leaning on this dataset's label-construction mechanics."
     )
     print(f"{'=' * 60}")
 
