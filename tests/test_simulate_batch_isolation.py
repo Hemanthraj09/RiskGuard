@@ -32,9 +32,11 @@ import main  # noqa: E402
 CUSTOMER_ID = "TESTCUST001"
 
 
-def _fresh_db(tmp_path):
+def _fresh_db(tmp_path, monkeypatch):
+    # monkeypatch, not a bare assignment: db.DB_PATH must be restored after
+    # the test, or every later test in the session silently shares this file.
     db_path = str(tmp_path / "isolation_test.db")
-    db.DB_PATH = db_path
+    monkeypatch.setattr(db, "DB_PATH", db_path)
     db.init_db()
     return db_path
 
@@ -66,7 +68,7 @@ def _order_count_for(conn, customer_id):
 
 
 def test_simulate_batch_defers_commit_until_exhausted(tmp_path, monkeypatch):
-    _fresh_db(tmp_path)
+    _fresh_db(tmp_path, monkeypatch)
     conn = db.get_connection()
     try:
         _seed_customer_with_one_past_order(conn)
@@ -96,7 +98,7 @@ def test_simulate_batch_defers_commit_until_exhausted(tmp_path, monkeypatch):
 
 
 def test_simulate_batch_isolates_same_customer_orders(tmp_path, monkeypatch):
-    _fresh_db(tmp_path)
+    _fresh_db(tmp_path, monkeypatch)
     conn = db.get_connection()
     try:
         _seed_customer_with_one_past_order(conn)

@@ -13,3 +13,4 @@ env/
 frontend/AGENTS.md
 frontend/CLAUDE.md
 data/riskguard.db
+data/riskguard.db-*
