@@ -1,4 +1,4 @@
-import type { AnalystDecision, DecisionLogEntry, EvalResults, ScoredOrder, SimulateResponse } from "./types";
+import type { AnalystDecision, DecisionsResponse, EvalResults, ScoredOrder, SimulateResponse } from "./types";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -56,6 +56,6 @@ export function postDecision(orderId: string, decision: AnalystDecision) {
   });
 }
 
-export function getDecisions(limit = 100): Promise<{ decisions: DecisionLogEntry[] }> {
+export function getDecisions(limit = 100): Promise<DecisionsResponse> {
   return request(`/decisions?limit=${limit}`);
 }

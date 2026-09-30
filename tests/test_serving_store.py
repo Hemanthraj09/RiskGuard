@@ -278,6 +278,17 @@ def test_score_uses_the_tier_on_file_for_known_customers(client):
     assert brand_new.json()["delivery_pincode_tier"] == "metro"
 
 
+def test_decision_timestamps_are_unambiguous_utc(client):
+    order = client.post("/score", json=ORDER).json()
+    logged = client.post("/decide", json={"order_id": order["order_id"], "decision": "flagged_for_verification"}).json()
+    datetime.strptime(logged["decided_at"], "%Y-%m-%dT%H:%M:%SZ")
+
+    listing = client.get("/decisions", params={"limit": 5}).json()
+    assert listing["total"] == 1
+    assert listing["decisions"][0]["decided_at"] == logged["decided_at"]
+    assert client.get("/decisions", params={"limit": 0}).status_code == 422
+
+
 def test_orders_feed_reconstructs_what_scoring_reported(client):
     scored = [
         client.post("/score", json={**ORDER, "order_value": value, "product_category": category}).json()

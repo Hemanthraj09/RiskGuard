@@ -16,7 +16,7 @@ export interface DecisionLogEntry {
   id: number;
   order_id: string;
   analyst_decision: AnalystDecision;
-  decided_at: string;
+  decided_at: string; // ISO-8601 UTC ("...Z")
   customer_id: string;
   product_category: ProductCategory;
   payment_mode: PaymentMode;
@@ -24,6 +24,11 @@ export interface DecisionLogEntry {
   predicted_probability: number;
   risk_band: RiskBand;
   returned: number | null;
+}
+
+export interface DecisionsResponse {
+  decisions: DecisionLogEntry[];
+  total: number; // every logged decision, not just the most recent ones returned
 }
 
 export interface ShapContributor {

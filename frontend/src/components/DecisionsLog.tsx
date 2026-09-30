@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { getDecisions } from "@/lib/api";
-import type { DecisionLogEntry } from "@/lib/types";
+import type { DecisionLogEntry, DecisionsResponse } from "@/lib/types";
 import { RiskBadge } from "@/components/RiskBadge";
 import { StatTile } from "@/components/StatTile";
 
 const rupees = (v: number) => `Rs.${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+const RECENT_LIMIT = 50;
 
 const DECISION_LABEL: Record<string, string> = {
   confirmed_normal: "Confirmed normal",
@@ -31,12 +32,15 @@ function agreementBadge(entry: DecisionLogEntry) {
 }
 
 export function DecisionsLog({ refreshKey }: { refreshKey: number }) {
-  const [decisions, setDecisions] = useState<DecisionLogEntry[] | null>(null);
+  const [data, setData] = useState<DecisionsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    getDecisions(50)
-      .then((res) => setDecisions(res.decisions))
+    getDecisions(RECENT_LIMIT)
+      .then((res) => {
+        setData(res);
+        setError(null);
+      })
       .catch((e) => setError(String(e)));
   }, [refreshKey]);
 
@@ -48,16 +52,19 @@ export function DecisionsLog({ refreshKey }: { refreshKey: number }) {
     );
   }
 
-  if (decisions === null) {
+  if (data === null) {
     return null;
   }
 
-  const totalDecisions = decisions.length;
+  // Agreement stats are over the decisions actually loaded -- the most recent
+  // RECENT_LIMIT -- and say so once there are more than that.
+  const { decisions, total } = data;
+  const windowLabel = total > decisions.length ? ` (last ${decisions.length})` : "";
   const agreements = decisions.filter(
     (d) => (d.risk_band === "high") === (d.analyst_decision === "flagged_for_verification")
   ).length;
-  const overrides = totalDecisions - agreements;
-  const agreementRate = totalDecisions > 0 ? agreements / totalDecisions : 0;
+  const overrides = decisions.length - agreements;
+  const agreementRate = decisions.length > 0 ? agreements / decisions.length : 0;
   const agreementRateColor =
     agreementRate > 0.7 ? "var(--status-good)" : agreementRate >= 0.5 ? "var(--status-warning)" : "var(--status-critical)";
 
@@ -79,14 +86,14 @@ export function DecisionsLog({ refreshKey }: { refreshKey: number }) {
       ) : (
         <>
         <div className="mt-4 grid grid-cols-3 gap-3">
-          <StatTile label="Total decisions" value={String(totalDecisions)} />
+          <StatTile label="Total decisions" value={String(total)} />
           <StatTile
-            label="Agreement rate"
+            label={`Agreement rate${windowLabel}`}
             value={`${(agreementRate * 100).toFixed(0)}%`}
             valueColor={agreementRateColor}
-            sublabel={`${agreements} of ${totalDecisions} agree with model`}
+            sublabel={`${agreements} of ${decisions.length} agree with model`}
           />
-          <StatTile label="Overrides" value={String(overrides)} sublabel="Analyst disagreed with model" />
+          <StatTile label={`Overrides${windowLabel}`} value={String(overrides)} sublabel="Analyst disagreed with model" />
         </div>
         <div className="mt-4 max-h-[420px] overflow-y-auto overflow-x-auto">
           <table className="w-full text-sm">
@@ -119,7 +126,7 @@ export function DecisionsLog({ refreshKey }: { refreshKey: number }) {
                   </td>
                   <td className="py-2 pr-4">{agreementBadge(d)}</td>
                   <td className="py-2 pr-4 text-xs" style={{ color: "var(--text-muted)" }}>
-                    {new Date(d.decided_at + "Z").toLocaleString()}
+                    {new Date(d.decided_at).toLocaleString()}
                   </td>
                 </tr>
               ))}

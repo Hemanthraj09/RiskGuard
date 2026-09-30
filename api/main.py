@@ -418,22 +418,26 @@ def decide(req: DecideRequest):
         if not order_exists:
             raise HTTPException(status_code=404, detail=f"Order {req.order_id} not found")
 
-        decided_at = datetime.utcnow()
+        decided_at = db.utc_now().replace(microsecond=0)
         db.insert_decision(conn, req.order_id, req.decision, decided_at)
         conn.commit()
-        return {"order_id": req.order_id, "decision": req.decision, "decided_at": decided_at.isoformat()}
+        return {
+            "order_id": req.order_id,
+            "decision": req.decision,
+            "decided_at": decided_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
     finally:
         conn.close()
 
 
 @app.get("/decisions")
-def decisions(limit: int = 100):
+def decisions(limit: int = Query(default=100, ge=1, le=1000)):
     """Outcome-vs-prediction view: recent analyst decisions alongside what
-    the model predicted for that order at scoring time."""
+    the model predicted for that order at scoring time. `total` counts every
+    logged decision, not just the `limit` most recent ones returned."""
     conn = db.get_connection()
     try:
-        rows = db.get_decisions(conn, limit=limit)
-        return {"decisions": rows}
+        return {"decisions": db.get_decisions(conn, limit=limit), "total": db.count_decisions(conn)}
     finally:
         conn.close()
 

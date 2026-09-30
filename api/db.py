@@ -121,6 +121,12 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def to_utc_iso(value: str) -> str:
+    """A stored naive-UTC timestamp as unambiguous ISO-8601 ("...Z"), so
+    clients never have to guess the timezone or patch the string."""
+    return _parse_ts(value).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _get_meta(conn: sqlite3.Connection, key: str):
     row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else None
@@ -334,6 +340,10 @@ def get_recent_orders(conn: sqlite3.Connection, limit: int = 200):
     return [dict(r) for r in rows]
 
 
+def count_decisions(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) AS c FROM decisions").fetchone()["c"]
+
+
 def get_decisions(conn: sqlite3.Connection, limit: int = 100):
     """
     Decisions joined with the order they were made on, newest first -- the
@@ -353,4 +363,7 @@ def get_decisions(conn: sqlite3.Connection, limit: int = 100):
         """,
         (limit,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    decisions = [dict(r) for r in rows]
+    for d in decisions:
+        d["decided_at"] = to_utc_iso(d["decided_at"])
+    return decisions
